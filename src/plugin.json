@@ -12,8 +12,8 @@
     "keywords": ["alerting", "problems", "incidents", "acknowledgement"],
     "logos": { "small": "img/logo.svg", "large": "img/logo.svg" },
     "links": [{ "name": "Documentation", "url": "https://github.com/mlimarenko/grafana-problem-desk#readme" }],
-    "version": "0.1.0",
-    "updated": "2026-11-09",
+    "version": "0.2.0",
+    "updated": "2026-11-10",
     "screenshots": []
   },
   "includes": [{ "type": "page", "name": "Problems", "path": "/a/mlimarenko-problemdesk-app", "role": "Viewer", "addToNav": true, "defaultNav": true }],

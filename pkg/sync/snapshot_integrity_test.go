@@ -56,7 +56,7 @@ func TestSnapshotCompleteness(t *testing.T) {
 			if (err != nil) != tc.wantError {
 				t.Errorf("error = %v, wantError = %v", err, tc.wantError)
 			}
-			_, total, err := store.GetProblems(ctx, 1, "active", "", "", 10, 0)
+			_, total, err := getProblems(store, ctx, 1, "active", "", "", 10, 0)
 			if err != nil {
 				t.Fatal(err)
 			}

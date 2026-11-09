@@ -3,7 +3,7 @@ SHELL := /bin/bash
 GO ?= go
 GOOS ?= linux
 GOARCH ?= amd64
-FRONTEND := $(wildcard src/*.ts src/*.tsx src/pages/*.tsx docs/*/*.md docs/assets/*) src/plugin.json webpack.config.cjs tsconfig.json
+FRONTEND := $(shell find src -type f \( -name '*.ts' -o -name '*.tsx' \)) $(wildcard docs/*/*.md docs/assets/*) src/plugin.json webpack.config.cjs tsconfig.json
 BACKEND := $(wildcard pkg/*.go pkg/*/*.go) go.mod go.sum
 
 .PHONY: build test package dev stop clean

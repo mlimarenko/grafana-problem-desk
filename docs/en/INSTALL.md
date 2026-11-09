@@ -2,12 +2,12 @@
 
 Problem Desk is an app plugin for Grafana 13.3 or later. Install a plugin package on the Grafana server, then enable the app in Grafana. The plugin ID is `mlimarenko-problemdesk-app`. The initial binary package targets Linux amd64.
 
-The first version is unsigned. For self-hosted development only, Grafana can be configured to allow this specific unsigned plugin using `allow_loading_unsigned_plugins = mlimarenko-problemdesk-app` in its `[plugins]` configuration. Restart Grafana after changing its configuration. Do not use a blanket unsigned-plugin allowance.
+The plugin is unsigned. For self-hosted development only, Grafana can be configured to allow this specific unsigned plugin using `allow_loading_unsigned_plugins = mlimarenko-problemdesk-app` in its `[plugins]` configuration. Restart Grafana after changing its configuration. Do not use a blanket unsigned-plugin allowance.
 
 Download the Linux amd64 package and verify its checksum before unpacking it:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 ASSET="mlimarenko-problemdesk-app-${VERSION}.zip"
 BASE="https://github.com/mlimarenko/grafana-problem-desk/releases/download/v${VERSION}"
 curl -fLO "${BASE}/${ASSET}"

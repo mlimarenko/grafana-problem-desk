@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
 
 	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 )
@@ -144,101 +143,6 @@ func (s *Store) migrate() error {
 	`
 	_, err := s.db.Exec(schema)
 	return err
-}
-
-// GetProblems queries problems for the given org_id with filtering and pagination.
-func (s *Store) GetProblems(ctx context.Context, orgID int64, state, severity, search string, limit, offset int) ([]models.Problem, int, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	whereClauses := []string{"org_id = ?"}
-	args := []any{orgID}
-
-	switch strings.ToLower(state) {
-	case "recovered":
-		whereClauses = append(whereClauses, "status = 'recovered'")
-	case "all":
-		// no status restriction
-	case "active":
-		fallthrough
-	default:
-		whereClauses = append(whereClauses, "status = 'active'")
-	}
-
-	if severity != "" {
-		whereClauses = append(whereClauses, "json_extract(labels, '$.severity') = ?")
-		args = append(args, severity)
-	}
-
-	if search != "" {
-		likeTerm := "%" + search + "%"
-		whereClauses = append(whereClauses, "(fingerprint LIKE ? OR labels LIKE ? OR annotations LIKE ? OR generator_url LIKE ?)")
-		args = append(args, likeTerm, likeTerm, likeTerm, likeTerm)
-	}
-
-	whereSQL := strings.Join(whereClauses, " AND ")
-
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM problems WHERE %s", whereSQL)
-	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("failed to count problems: %w", err)
-	}
-
-	selectQuery := fmt.Sprintf(`
-		SELECT id, fingerprint, starts_at, ends_at, status, labels, annotations,
-		       generator_url, acknowledged_by, acknowledged_at, assignee, last_seen_at
-		FROM problems
-		WHERE %s
-		ORDER BY starts_at DESC, id DESC
-		LIMIT ? OFFSET ?
-	`, whereSQL)
-
-	selectArgs := append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, selectQuery, selectArgs...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to query problems: %w", err)
-	}
-	defer rows.Close()
-
-	problems := make([]models.Problem, 0)
-	for rows.Next() {
-		var p models.Problem
-		var labelsJSON, annotationsJSON string
-		if err := rows.Scan(
-			&p.ID,
-			&p.Fingerprint,
-			&p.StartsAt,
-			&p.EndsAt,
-			&p.Status,
-			&labelsJSON,
-			&annotationsJSON,
-			&p.GeneratorURL,
-			&p.AcknowledgedBy,
-			&p.AcknowledgedAt,
-			&p.Assignee,
-			&p.LastSeenAt,
-		); err != nil {
-			return nil, 0, fmt.Errorf("failed to scan problem: %w", err)
-		}
-		_ = json.Unmarshal([]byte(labelsJSON), &p.Labels)
-		if p.Labels == nil {
-			p.Labels = make(map[string]string)
-		}
-		_ = json.Unmarshal([]byte(annotationsJSON), &p.Annotations)
-		if p.Annotations == nil {
-			p.Annotations = make(map[string]string)
-		}
-		problems = append(problems, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("rows error: %w", err)
-	}
-
-	return problems, total, nil
 }
 
 // GetProblemByID loads a single problem by ID, strictly enforcing org_id scoping.

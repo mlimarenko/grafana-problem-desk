@@ -2,12 +2,12 @@
 
 Problem Desk - приложение-плагин для Grafana 13.3 и новее. Установите пакет плагина на сервер Grafana, затем включите приложение в Grafana. ID плагина: `mlimarenko-problemdesk-app`. Первый бинарный пакет предназначен для Linux amd64.
 
-Первая версия не подписана. Только для разработки на собственном сервере Grafana можно настроить на загрузку именно этого неподписанного плагина: `allow_loading_unsigned_plugins = mlimarenko-problemdesk-app` в разделе `[plugins]`. После изменения конфигурации перезапустите Grafana. Не разрешайте загрузку всех неподписанных плагинов.
+Плагин не подписан. Только для разработки на собственном сервере Grafana можно настроить на загрузку именно этого неподписанного плагина: `allow_loading_unsigned_plugins = mlimarenko-problemdesk-app` в разделе `[plugins]`. После изменения конфигурации перезапустите Grafana. Не разрешайте загрузку всех неподписанных плагинов.
 
 Загрузите пакет Linux amd64 и проверьте контрольную сумму до распаковки:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 ASSET="mlimarenko-problemdesk-app-${VERSION}.zip"
 BASE="https://github.com/mlimarenko/grafana-problem-desk/releases/download/v${VERSION}"
 curl -fLO "${BASE}/${ASSET}"

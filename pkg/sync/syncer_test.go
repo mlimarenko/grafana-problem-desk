@@ -9,9 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 	"github.com/mlimarenko/grafana-problem-desk/pkg/storage"
 	problemsync "github.com/mlimarenko/grafana-problem-desk/pkg/sync"
 )
+
+func getProblems(s *storage.Store, ctx context.Context, org int64, state, severity, search string, limit, offset int) ([]models.Problem, int, error) {
+	now := time.Now().UTC()
+	r, err := s.GetProblems(ctx, org, storage.ProblemQuery{View: "history", State: state, Severity: severity, Search: search, Sort: "started", Order: "desc", From: now.AddDate(-200, 0, 0), To: now.AddDate(200, 0, 0), Now: now, Limit: limit, Offset: offset})
+	return r.Problems, r.Total, err
+}
 
 func TestSyncerSuccessAndSnapshot(t *testing.T) {
 	ctx := context.Background()
@@ -56,7 +63,7 @@ func TestSyncerSuccessAndSnapshot(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	probs, total, err := store.GetProblems(ctx, trustedOrgID, "active", "", "", 10, 0)
+	probs, total, err := getProblems(store, ctx, trustedOrgID, "active", "", "", 10, 0)
 	if err != nil || total != 1 {
 		t.Fatalf("expected 1 active problem, got %d, err: %v", total, err)
 	}
@@ -113,7 +120,7 @@ func TestSyncerOrgMismatchNeverResolves(t *testing.T) {
 	}
 
 	// Verify problem is STILL active (NO false recovery!)
-	probs, total, err := store.GetProblems(ctx, trustedOrgID, "active", "", "", 10, 0)
+	probs, total, err := getProblems(store, ctx, trustedOrgID, "active", "", "", 10, 0)
 	if err != nil || total != 1 || len(probs) != 1 {
 		t.Fatalf("expected problem to remain active after org mismatch, got total: %d", total)
 	}
@@ -159,7 +166,7 @@ func TestSyncerFailedSourceNeverResolves(t *testing.T) {
 		t.Fatalf("expected error on 500 response, got nil")
 	}
 
-	probs, total, _ := store.GetProblems(ctx, trustedOrgID, "active", "", "", 10, 0)
+	probs, total, _ := getProblems(store, ctx, trustedOrgID, "active", "", "", 10, 0)
 	if total != 1 || probs[0].Status != "active" {
 		t.Fatalf("active problem was wrongly marked recovered on 500 error!")
 	}
@@ -251,7 +258,7 @@ func TestSyncerTruncatedOrMalformedJSONNeverResolves(t *testing.T) {
 			}
 
 			// Must NOT cause false recoveries
-			probs, total, _ := store.GetProblems(ctx, trustedOrgID, "active", "", "", 10, 0)
+			probs, total, _ := getProblems(store, ctx, trustedOrgID, "active", "", "", 10, 0)
 			if total != 1 || probs[0].Status != "active" {
 				t.Fatalf("false recovery occurred for test case %s!", tc.name)
 			}
@@ -296,7 +303,7 @@ func TestSyncerSuppressedPastEndsAtPreserved(t *testing.T) {
 	}
 
 	// Must be kept active (not falsely skipped / recovered)
-	probs, total, err := store.GetProblems(ctx, trustedOrgID, "active", "", "", 10, 0)
+	probs, total, err := getProblems(store, ctx, trustedOrgID, "active", "", "", 10, 0)
 	if err != nil || total != 1 || len(probs) != 1 {
 		t.Fatalf("expected suppressed alert with past endsAt to be stored as active, got total %d", total)
 	}
@@ -411,6 +418,17 @@ func TestNormalizeTimestamp_PreservesFractionalSeconds(t *testing.T) {
 	}
 	if norm1 != "2026-11-09T10:00:00.123456Z" {
 		t.Errorf("expected fractional precision preserved, got %s", norm1)
+	}
+}
+
+func TestNormalizeTimestamp_UTCYearBounds(t *testing.T) {
+	for _, raw := range []string{"9999-12-31T23:59:59-01:00", "0000-01-01T00:00:00+01:00"} {
+		if _, err := problemsync.NormalizeTimestamp(raw); err == nil {
+			t.Errorf("accepted out-of-range UTC timestamp %q", raw)
+		}
+	}
+	if got, err := problemsync.NormalizeTimestamp("2026-01-01T03:00:00.123456789+03:00"); err != nil || got != "2026-01-01T00:00:00.123456789Z" {
+		t.Fatalf("valid offset: %q, %v", got, err)
 	}
 }
 

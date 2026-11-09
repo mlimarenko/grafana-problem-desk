@@ -6,6 +6,6 @@ Viewers can read; Editors and Admins can comment and ACK or unACK; Admins can co
 
 Comments and acknowledgements are stored in organization-scoped persistent SQLite, separate from Grafana's database. Treat storage and backups as sensitive: comments and alert context may contain operational details. Restrict access, protect backups and apply retention rules appropriate to your environment. Keep the service-account token in secure plugin configuration.
 
-An acknowledgement does not mute or resolve an alert. The first version is unsigned; allow it only by the explicit plugin ID in self-hosted development.
+An acknowledgement does not mute or resolve an alert. The plugin is unsigned; allow it only by the explicit plugin ID in self-hosted development.
 
 For vulnerability reporting, see the [security policy](../../SECURITY.md).

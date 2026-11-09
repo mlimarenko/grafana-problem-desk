@@ -15,6 +15,12 @@ import (
 	"github.com/mlimarenko/grafana-problem-desk/pkg/storage"
 )
 
+func getProblems(s *storage.Store, ctx context.Context, org int64, state, severity, search string, limit, offset int) ([]models.Problem, int, error) {
+	now := time.Now().UTC()
+	r, err := s.GetProblems(ctx, org, storage.ProblemQuery{View: "history", State: state, Severity: severity, Search: search, Sort: "started", Order: "desc", From: now.AddDate(-200, 0, 0), To: now.AddDate(200, 0, 0), Now: now, Limit: limit, Offset: offset})
+	return r.Problems, r.Total, err
+}
+
 type testSender struct {
 	resp *backend.CallResourceResponse
 }
@@ -59,7 +65,7 @@ func setupTestApp(t *testing.T) (*plugin.App, *storage.Store, string) {
 	}
 	_ = store.SyncSnapshot(context.Background(), orgID, t0, []storage.SnapshotAlert{alert})
 
-	probs, _, _ := store.GetProblems(context.Background(), orgID, "active", "", "", 10, 0)
+	probs, _, _ := getProblems(store, context.Background(), orgID, "active", "", "", 10, 0)
 	if len(probs) == 0 {
 		t.Fatalf("failed to seed problem")
 	}

@@ -6,8 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 	"github.com/mlimarenko/grafana-problem-desk/pkg/storage"
 )
+
+func getProblems(s *storage.Store, ctx context.Context, org int64, state, severity, search string, limit, offset int) ([]models.Problem, int, error) {
+	now := time.Now().UTC()
+	r, err := s.GetProblems(ctx, org, storage.ProblemQuery{View: "history", State: state, Severity: severity, Search: search, Sort: "started", Order: "desc", From: now.AddDate(-200, 0, 0), To: now.AddDate(200, 0, 0), Now: now, Limit: limit, Offset: offset})
+	return r.Problems, r.Total, err
+}
 
 func TestStorePersistenceAfterReopen(t *testing.T) {
 	ctx := context.Background()
@@ -33,7 +40,7 @@ func TestStorePersistenceAfterReopen(t *testing.T) {
 		t.Fatalf("failed to sync snapshot: %v", err)
 	}
 
-	problems, total, err := store1.GetProblems(ctx, orgID, "active", "", "", 10, 0)
+	problems, total, err := getProblems(store1, ctx, orgID, "active", "", "", 10, 0)
 	if err != nil || total != 1 || len(problems) != 1 {
 		t.Fatalf("expected 1 problem, got %d, err: %v", total, err)
 	}
@@ -46,6 +53,9 @@ func TestStorePersistenceAfterReopen(t *testing.T) {
 
 	if _, err := store1.AcknowledgeProblem(ctx, orgID, probID, "admin", "acknowledged disk issue"); err != nil {
 		t.Fatalf("failed to ack problem: %v", err)
+	}
+	if _, err := store1.AssignProblem(ctx, orgID, probID, "admin", "alice"); err != nil {
+		t.Fatalf("failed to assign problem: %v", err)
 	}
 
 	if err := store1.SetSyncStatus(ctx, orgID, t1.Format(time.RFC3339), ""); err != nil {
@@ -71,6 +81,9 @@ func TestStorePersistenceAfterReopen(t *testing.T) {
 	}
 	if reloaded.AcknowledgedBy != "admin" {
 		t.Errorf("expected acknowledgedBy admin, got %q", reloaded.AcknowledgedBy)
+	}
+	if reloaded.Assignee != "alice" {
+		t.Errorf("expected assignee alice, got %q", reloaded.Assignee)
 	}
 	if reloaded.Fingerprint != "fp-persist-1" {
 		t.Errorf("expected fingerprint fp-persist-1, got %q", reloaded.Fingerprint)
@@ -136,14 +149,14 @@ func TestCrossOrgReadWriteIsolation(t *testing.T) {
 		t.Fatalf("sync org1 failed: %v", err)
 	}
 
-	probsOrg1, totalOrg1, err := store.GetProblems(ctx, org1, "all", "", "", 10, 0)
+	probsOrg1, totalOrg1, err := getProblems(store, ctx, org1, "all", "", "", 10, 0)
 	if err != nil || totalOrg1 != 1 {
 		t.Fatalf("expected 1 problem in org1, got %d, err: %v", totalOrg1, err)
 	}
 	probID := probsOrg1[0].ID
 
 	// 1. Cross-org listing: Org2 must see 0 problems
-	probsOrg2, totalOrg2, err := store.GetProblems(ctx, org2, "all", "", "", 10, 0)
+	probsOrg2, totalOrg2, err := getProblems(store, ctx, org2, "all", "", "", 10, 0)
 	if err != nil {
 		t.Fatalf("org2 query failed: %v", err)
 	}
@@ -208,12 +221,12 @@ func TestParameterizedStorageAndSQLInjection(t *testing.T) {
 	}
 
 	for _, injection := range sqlInjections {
-		_, _, err := store.GetProblems(ctx, orgID, "all", "", injection, 10, 0)
+		_, _, err := getProblems(store, ctx, orgID, "all", "", injection, 10, 0)
 		if err != nil {
 			t.Errorf("search injection %q caused unexpected error: %v", injection, err)
 		}
 
-		_, _, err = store.GetProblems(ctx, orgID, "all", injection, "", 10, 0)
+		_, _, err = getProblems(store, ctx, orgID, "all", injection, "", 10, 0)
 		if err != nil {
 			t.Errorf("severity injection %q caused unexpected error: %v", injection, err)
 		}
@@ -251,7 +264,7 @@ func TestRecurrenceIndependentDiscussionAndAck(t *testing.T) {
 		t.Fatalf("sync E1 failed: %v", err)
 	}
 
-	probs1, _, _ := store.GetProblems(ctx, orgID, "active", "", "", 10, 0)
+	probs1, _, _ := getProblems(store, ctx, orgID, "active", "", "", 10, 0)
 	if len(probs1) != 1 {
 		t.Fatalf("expected 1 problem, got %d", len(probs1))
 	}
@@ -291,7 +304,7 @@ func TestRecurrenceIndependentDiscussionAndAck(t *testing.T) {
 		t.Fatalf("sync E2 failed: %v", err)
 	}
 
-	probsActive, totalActive, err := store.GetProblems(ctx, orgID, "active", "", "", 10, 0)
+	probsActive, totalActive, err := getProblems(store, ctx, orgID, "active", "", "", 10, 0)
 	if err != nil || totalActive != 1 {
 		t.Fatalf("expected 1 active problem, got %d, err: %v", totalActive, err)
 	}
@@ -316,7 +329,7 @@ func TestRecurrenceIndependentDiscussionAndAck(t *testing.T) {
 	}
 
 	// Total problems in org across all states must be 2 (E1 recovered, E2 active)
-	allProbs, totalAll, err := store.GetProblems(ctx, orgID, "all", "", "", 10, 0)
+	allProbs, totalAll, err := getProblems(store, ctx, orgID, "all", "", "", 10, 0)
 	if err != nil || totalAll != 2 || len(allProbs) != 2 {
 		t.Fatalf("expected total 2 episodes, got %d", totalAll)
 	}
@@ -346,7 +359,7 @@ func TestReplayIdempotence(t *testing.T) {
 	if err := store.SyncSnapshot(ctx, orgID, t1, []storage.SnapshotAlert{alert}); err != nil {
 		t.Fatalf("sync 1 failed: %v", err)
 	}
-	probs1, _, _ := store.GetProblems(ctx, orgID, "active", "", "", 10, 0)
+	probs1, _, _ := getProblems(store, ctx, orgID, "active", "", "", 10, 0)
 	eID := probs1[0].ID
 
 	// Ack problem
@@ -359,7 +372,7 @@ func TestReplayIdempotence(t *testing.T) {
 		t.Fatalf("sync 2 replay failed: %v", err)
 	}
 
-	probs2, total, err := store.GetProblems(ctx, orgID, "all", "", "", 10, 0)
+	probs2, total, err := getProblems(store, ctx, orgID, "all", "", "", 10, 0)
 	if err != nil || total != 1 {
 		t.Fatalf("expected total 1 problem after replay, got %d", total)
 	}

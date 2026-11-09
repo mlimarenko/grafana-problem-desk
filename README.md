@@ -11,11 +11,13 @@ Problem Desk is an app plugin for working with problem episodes from Grafana Ale
 
 ## What it adds
 
-- Current and recovered episodes, with state, severity and text filters
+- Problems, Recent and History views with server-side filters and pagination
+- Host, severity, acknowledgement, owner and label filters; time windows and duration sorting
 - A discussion attached to a specific occurrence, not a point on a graph
 - Acknowledgement, owner labels and an operator activity log
 - Persistent SQLite storage, Grafana user attribution and organization isolation
 - Grafana-native controls and a layout that also works on narrow screens
+- English and Russian interface, with a remembered language preference
 
 Problem Desk is an **organization-wide shared workspace**. It does not reproduce Grafana Alerting's per-folder permissions: alert data visible to its service account is shared with organization members through the plugin. Administrators must not enable it where this would expose restricted data. See [security](docs/en/SECURITY.md).
 

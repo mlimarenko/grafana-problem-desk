@@ -41,9 +41,27 @@ type SourceStatus struct {
 
 // ProblemsResponse represents the paginated problems listing response.
 type ProblemsResponse struct {
-	Problems []Problem    `json:"problems"`
-	Total    int          `json:"total"`
-	Source   SourceStatus `json:"source"`
+	Problems []Problem      `json:"problems"`
+	Total    int            `json:"total"`
+	Source   SourceStatus   `json:"source"`
+	Summary  ProblemSummary `json:"summary"`
+	Facets   ProblemFacets  `json:"facets"`
+}
+
+type ProblemSummary struct {
+	Active         int `json:"active"`
+	Recovered      int `json:"recovered"`
+	Acknowledged   int `json:"acknowledged"`
+	Unacknowledged int `json:"unacknowledged"`
+	Unassigned     int `json:"unassigned"`
+	Critical       int `json:"critical"`
+	Warning        int `json:"warning"`
+}
+
+type ProblemFacets struct {
+	Hosts     []string `json:"hosts"`
+	Assignees []string `json:"assignees"`
+	LabelKeys []string `json:"labelKeys"`
 }
 
 // ProblemDetailsResponse represents the problem details with comments and audit events.

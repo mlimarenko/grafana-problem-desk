@@ -1,187 +1,1527 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2 } from '@grafana/data';
-import { config, getBackendSrv, locationService } from '@grafana/runtime';
-import { Alert, Button, Field, Input, LoadingPlaceholder, Select, TextArea, useStyles2 } from '@grafana/ui';
-import { Detail, Listing, Problem, describeError, pluginId, problemTitle, safeURL, targetName } from '../model';
-
-const resource = `/api/plugins/${pluginId}/resources`;
-const pageSize = 50;
-const time = (value: string) => value ? new Date(value).toLocaleString() : '—';
+import type { GrafanaTheme2, SelectableValue } from '@grafana/data';
+import { config, locationService } from '@grafana/runtime';
+import {
+  Alert,
+  Button,
+  Field,
+  Icon,
+  Input,
+  RadioButtonGroup,
+  Select,
+  Spinner,
+  Tab,
+  TabsBar,
+  useStyles2,
+} from '@grafana/ui';
+import { DetailDrawer, type BusyAction } from '../components/DetailDrawer';
+import { ProblemTable } from '../components/ProblemTable';
+import { errorText, I18nProvider, useI18n, type Language } from '../i18n';
+import { dateTimeLocalToISO, toDateTimeLocalValue } from '../i18n/format';
+import {
+  errorStatus,
+  fetchDetail,
+  fetchProblems,
+  postAck,
+  postAssign,
+  postComment,
+  postSync,
+  postUnack,
+  resolveProblem,
+} from '../api';
+import { toCSV, downloadCSV } from '../lib/csv';
+import { resolveDeepLink, type DeepLinkError } from '../lib/deeplink';
+import { correctedOffset, submitCommentDraft, validLabelFilter } from '../lib/workspace';
+import {
+  activeFilterCount,
+  clearDeepLink,
+  closeProblem,
+  hasDeepLink,
+  mergedQueryString,
+  pageCount,
+  parseQuery,
+  queryString,
+  rangeWindow,
+  resetFilters,
+  selectProblem,
+  validateCustomRange,
+  withView,
+  type RangePreset,
+  type SortKey,
+  type View,
+  type WorkspaceQuery,
+} from '../lib/query';
+import {
+  classifyError,
+  elapsedMs,
+  problemTitle,
+  severityTone,
+  type Detail,
+  type ErrorKind,
+  type Listing,
+  type Problem,
+} from '../model';
+import { pluginId } from '../model';
 
 export function Problems() {
+  return (
+    <I18nProvider>
+      <Workspace />
+    </I18nProvider>
+  );
+}
+
+type ResolveState =
+  | { status: 'idle' }
+  | { status: 'resolving' }
+  | { status: 'not-found' }
+  | { status: 'ambiguous' }
+  | { status: 'invalid'; error: DeepLinkError }
+  | { status: 'error' };
+
+function Workspace() {
   const styles = useStyles2(getStyles);
+  const {
+    language,
+    setLanguage,
+    timeZone,
+    setTimeZone,
+    zoneLabel,
+    messages: m,
+    formatDate,
+    formatDuration,
+    formatRelative,
+  } = useI18n();
   const role = config.bootData.user.orgRole;
   const canWrite = role === 'Editor' || role === 'Admin';
   const canSync = role === 'Admin';
-  const [listing, setListing] = useState<Listing>();
-  const [state, setState] = useState('active');
-  const [severity, setSeverity] = useState('');
-  const [search, setSearch] = useState('');
-  const [submittedSearch, setSubmittedSearch] = useState('');
-  const [offset, setOffset] = useState(0);
-  const [selected, setSelected] = useState(new URLSearchParams(window.location.search).get('problem') || '');
-  const [detail, setDetail] = useState<Detail>();
-  const [draft, setDraft] = useState('');
-  const [error, setError] = useState('');
-  const [detailError, setDetailError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [refresh, setRefresh] = useState(0);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setRefresh(v => v + 1), 30000);
-    return () => window.clearInterval(timer);
+  const [query, setQueryState] = useState<WorkspaceQuery>(() => parseQuery(window.location.search));
+  const queryRef = useRef(query);
+
+  const adoptQuery = useCallback((next: WorkspaceQuery) => {
+    queryRef.current = next;
+    setQueryState(next);
   }, []);
 
-  useEffect(() => {
-    let current = true;
-    getBackendSrv().get<Listing>(`${resource}/problems`, { state, severity, search: submittedSearch, offset, limit: pageSize })
-      .then(data => { if (current) { setListing(data); setError(''); } })
-      .catch(error => { if (current) { setError(describeError(error)); } });
-    return () => { current = false; };
-  }, [state, severity, submittedSearch, offset, refresh]);
+  const navigate = useCallback(
+    (next: WorkspaceQuery, replace = false) => {
+      adoptQuery(next);
+      const location = locationService.getLocation();
+      const search = mergedQueryString(location.search, next);
+      const target = `${location.pathname}${search ? `?${search}` : ''}`;
+      if (replace) {
+        locationService.replace(target);
+      } else {
+        locationService.push(target);
+      }
+    },
+    [adoptQuery]
+  );
 
   useEffect(() => {
-    if (!selected) { setDetail(undefined); return; }
-    let current = true;
-    getBackendSrv().get<Detail>(`${resource}/problems/${encodeURIComponent(selected)}`)
-      .then(data => { if (current) { setDetail(data); setDetailError(''); } })
-      .catch(error => { if (current) { setDetailError(describeError(error)); } });
-    return () => { current = false; };
-  }, [selected, refresh]);
+    const subscription = locationService.getLocationObservable().subscribe((location) => {
+      const next = parseQuery(location.search);
+      if (queryString(next) !== queryString(queryRef.current)) {
+        adoptQuery(next);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [adoptQuery]);
 
-  function open(problem: Problem) {
-    if (problem.id !== selected && draft && !window.confirm('Discard your unsent comment?')) { return; }
-    setSelected(problem.id); setDetail(undefined); setDetailError(''); setDraft('');
-    locationService.partial({ problem: problem.id });
+  useEffect(() => {
+    const current = queryRef.current;
+    if (current.problem && hasDeepLink(current)) {
+      navigate(clearDeepLink(current), true);
+    }
+  }, [navigate]);
+
+  const selectedId = query.problem;
+  const [listing, setListing] = useState<Listing>();
+  const [listLoading, setListLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [listError, setListError] = useState<ErrorKind>();
+  const [lastLoadedAt, setLastLoadedAt] = useState(0);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const lastListKey = useRef('');
+  const listKey = useMemo(() => JSON.stringify(buildListSignature(query)), [query]);
+
+  function buildListSignature(value: WorkspaceQuery): Record<string, string | number> {
+    const copy = { ...value };
+    return {
+      view: copy.view,
+      range: copy.range,
+      from: copy.from,
+      to: copy.to,
+      state: copy.state,
+      severity: copy.severity,
+      host: copy.host,
+      assignee: copy.assignee,
+      assignment: copy.assignment,
+      ack: copy.ack,
+      search: copy.search,
+      labelKey: copy.labelKey,
+      labelValue: copy.labelValue,
+      labelKeyPresent: Number(copy.labelKeyPresent),
+      labelValuePresent: Number(copy.labelValuePresent),
+      sort: copy.sort,
+      order: copy.order,
+      limit: copy.limit,
+      offset: copy.offset,
+    };
   }
 
-  const mutate = useCallback(async (path: string, body: unknown) => {
-    setBusy(true); setDetailError('');
-    try {
-      await getBackendSrv().post(`${resource}${path}`, body);
-      setRefresh(v => v + 1);
-      return true;
-    } catch (error) { setDetailError(describeError(error)); return false; }
-    finally { setBusy(false); }
+  useEffect(() => {
+    let active = true;
+    const requestedQuery = queryRef.current;
+    const isCurrent = () => active && JSON.stringify(buildListSignature(queryRef.current)) === listKey;
+    const changed = lastListKey.current !== listKey;
+    lastListKey.current = listKey;
+    if (changed) {
+      setListLoading(true);
+      setRefreshing(false);
+      setListing(undefined);
+      setListError(undefined);
+    } else {
+      setRefreshing(true);
+    }
+    fetchProblems(requestedQuery, new Date())
+      .then((data) => {
+        if (!isCurrent()) {
+          return;
+        }
+        const offset = correctedOffset(requestedQuery.offset, requestedQuery.limit, data.total);
+        if (offset !== requestedQuery.offset) {
+          active = false;
+          setListing(undefined);
+          setListLoading(true);
+          setRefreshing(false);
+          navigate({ ...queryRef.current, offset }, true);
+          return;
+        }
+        setListing(data);
+        setListError(undefined);
+        setLastLoadedAt(Date.now());
+      })
+      .catch((error) => {
+        if (isCurrent()) {
+          setListError(classifyError(error));
+        }
+      })
+      .finally(() => {
+        if (isCurrent()) {
+          setListLoading(false);
+          setRefreshing(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [listKey, refreshToken, navigate]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        setRefreshToken((value) => value + 1);
+      }
+    }, 30000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        setRefreshToken((value) => value + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
+
+  const [detail, setDetail] = useState<Detail>();
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<ErrorKind>();
+  const [detailAttempt, setDetailAttempt] = useState(0);
+  const detailSequence = useRef(0);
+
+  useEffect(() => {
+    if (!selectedId) {
+      detailSequence.current += 1;
+      setDetail(undefined);
+      setDetailError(undefined);
+      setDetailLoading(false);
+      return;
+    }
+    const sequence = detailSequence.current + 1;
+    detailSequence.current = sequence;
+    setDetail((previous) => (previous?.problem.id === selectedId ? previous : undefined));
+    setDetailLoading(true);
+    setDetailError(undefined);
+    fetchDetail(selectedId)
+      .then((data) => {
+        if (sequence !== detailSequence.current || queryRef.current.problem !== selectedId) {
+          return;
+        }
+        setDetail(data);
+        setDetailError(undefined);
+      })
+      .catch((error) => {
+        if (sequence === detailSequence.current && queryRef.current.problem === selectedId) {
+          setDetailError(classifyError(error));
+        }
+      })
+      .finally(() => {
+        if (sequence === detailSequence.current) {
+          setDetailLoading(false);
+        }
+      });
+  }, [selectedId, refreshToken, detailAttempt]);
+
+  useEffect(() => {
+    setActionError(undefined);
+  }, [selectedId]);
+
+  const [busyAction, setBusyAction] = useState<BusyAction>();
+  const [actionError, setActionError] = useState<ErrorKind>();
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<ErrorKind>();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>({});
+  const draft = selectedId ? drafts[selectedId] ?? '' : '';
+  const ownerDraft = selectedId ? ownerDrafts[selectedId] ?? detail?.problem.assignee ?? '' : '';
+
+  const [searchDraft, setSearchDraft] = useState(query.search);
+  const [hostDraft, setHostDraft] = useState(query.host);
+  const [assigneeDraft, setAssigneeDraft] = useState(query.assignee);
+  const [labelKeyDraft, setLabelKeyDraft] = useState(query.labelKey);
+  const [labelValueDraft, setLabelValueDraft] = useState(query.labelValue);
+  const [customOpen, setCustomOpen] = useState(query.range === 'custom');
+  const [rangeFromDraft, setRangeFromDraft] = useState(toDateTimeLocalValue(query.from));
+  const [rangeToDraft, setRangeToDraft] = useState(toDateTimeLocalValue(query.to));
+  const [filterError, setFilterError] = useState('');
+  const [rangeError, setRangeError] = useState('');
+
+  useEffect(() => {
+    setSearchDraft(query.search);
+    setHostDraft(query.host);
+    setAssigneeDraft(query.assignee);
+    setLabelKeyDraft(query.labelKey);
+    setLabelValueDraft(query.labelValue);
+  }, [query.search, query.host, query.assignee, query.labelKey, query.labelValue]);
+
+  useEffect(() => {
+    setCustomOpen(query.range === 'custom');
+    setRangeFromDraft(toDateTimeLocalValue(query.from));
+    setRangeToDraft(toDateTimeLocalValue(query.to));
+    setRangeError('');
+  }, [query.range, query.from, query.to, query.view]);
+
+  const [resolveState, setResolveState] = useState<ResolveState>({ status: 'idle' });
+  const [resolveAttempt, setResolveAttempt] = useState(0);
+  const deepLinkKey = JSON.stringify([
+    query.fingerprint,
+    query.startsAt,
+    query.matchers,
+    query.ruleUID,
+    query.instance,
+    query.device,
+    query.mountpoint,
+    query.name,
+    query.datname,
+  ]);
+
+  useEffect(() => {
+    if (queryRef.current.problem) {
+      setResolveState({ status: 'idle' });
+      return;
+    }
+    const resolution = resolveDeepLink(queryRef.current);
+    if (!resolution) {
+      setResolveState({ status: 'idle' });
+      return;
+    }
+    if ('error' in resolution) {
+      setResolveState({ status: 'invalid', error: resolution.error });
+      return;
+    }
+    let active = true;
+    setResolveState({ status: 'resolving' });
+    resolveProblem(resolution.request)
+      .then((problemId) => {
+        if (!active) {
+          return;
+        }
+        const current = queryRef.current;
+        const currentKey = JSON.stringify([
+          current.fingerprint,
+          current.startsAt,
+          current.matchers,
+          current.ruleUID,
+          current.instance,
+          current.device,
+          current.mountpoint,
+          current.name,
+          current.datname,
+        ]);
+        if (current.problem || currentKey !== deepLinkKey) {
+          return;
+        }
+        setResolveState({ status: 'idle' });
+        navigate(selectProblem(current, problemId), true);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        const status = errorStatus(error);
+        if (status === 404) {
+          setResolveState({ status: 'not-found' });
+        } else if (status === 409) {
+          setResolveState({ status: 'ambiguous' });
+        } else if (status === 400) {
+          setResolveState({ status: 'invalid', error: query.fingerprint ? 'fingerprint' : 'matchers' });
+        } else {
+          setResolveState({ status: 'error' });
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [deepLinkKey, query.problem, resolveAttempt, navigate]);
+
+  function severityLabel(problem: Problem): string {
+    const raw = problem.labels.severity?.trim() ?? '';
+    const tone = severityTone(raw);
+    return tone === 'unknown' ? raw || m.severity.unknown : m.severity[tone];
+  }
+
+  function openProblem(problem: Problem) {
+    if (problem.id === selectedId) {
+      return;
+    }
+    if (!confirmDiscard()) {
+      return;
+    }
+    setActionError(undefined);
+    navigate(selectProblem(queryRef.current, problem.id));
+  }
+
+  function confirmDiscard(): boolean {
+    if (!selectedId) {
+      return true;
+    }
+    if (!drafts[selectedId]?.trim()) {
+      return true;
+    }
+    if (!window.confirm(m.drawer.discardConfirm)) {
+      return false;
+    }
+    discardDraft(selectedId);
+    return true;
+  }
+
+  function discardDraft(problemId: string) {
+    setDrafts((previous) => {
+      if (!(problemId in previous)) {
+        return previous;
+      }
+      const next = { ...previous };
+      delete next[problemId];
+      return next;
+    });
+  }
+
+  function closeDrawer() {
+    if (!confirmDiscard()) {
+      return;
+    }
+    setActionError(undefined);
+    navigate(closeProblem(queryRef.current), true);
+  }
+
+  function setDraft(value: string) {
+    if (!selectedId) {
+      return;
+    }
+    setDrafts((previous) => ({ ...previous, [selectedId]: value }));
+  }
+
+  function setOwnerDraft(value: string) {
+    if (!selectedId) {
+      return;
+    }
+    setOwnerDrafts((previous) => ({ ...previous, [selectedId]: value }));
+  }
+
+  function updateDetailProblem(updated: Problem) {
+    if (!updated || typeof updated.id !== 'string') {
+      return;
+    }
+    if (queryRef.current.problem === updated.id) {
+      detailSequence.current += 1;
+    }
+    setDetail((previous) => (previous && previous.problem.id === updated.id ? { ...previous, problem: updated } : previous));
+  }
+
+  async function runAction(action: BusyAction, problemId: string, operation: () => Promise<void>) {
+    setBusyAction(action);
+    setActionError(undefined);
+    try {
+      await operation();
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      if (queryRef.current.problem === problemId) {
+        setActionError(classifyError(error));
+      }
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
+  function acknowledge() {
+    const problemId = queryRef.current.problem;
+    if (!problemId) {
+      return;
+    }
+    void runAction('ack', problemId, async () => {
+      updateDetailProblem(await postAck(problemId));
+    });
+  }
+
+  function unacknowledge() {
+    const problemId = queryRef.current.problem;
+    if (!problemId) {
+      return;
+    }
+    void runAction('unack', problemId, async () => {
+      updateDetailProblem(await postUnack(problemId));
+    });
+  }
+
+  function assignOwner() {
+    const problemId = queryRef.current.problem;
+    if (!problemId) {
+      return;
+    }
+    const value = ownerDraft.trim();
+    void runAction('assign', problemId, async () => {
+      updateDetailProblem(await postAssign(problemId, value));
+      setOwnerDrafts((previous) => {
+        if (previous[problemId] !== undefined && previous[problemId] !== value) {
+          return previous;
+        }
+        const next = { ...previous };
+        delete next[problemId];
+        return next;
+      });
+    });
+  }
+
+  function addComment() {
+    const problemId = selectedId;
+    const submittedDraft = draft;
+    const body = submittedDraft.trim();
+    if (!problemId || queryRef.current.problem !== problemId || !body) {
+      return;
+    }
+    void runAction('comment', problemId, async () => {
+      await submitCommentDraft(problemId, submittedDraft, postComment, setDrafts);
+    });
+  }
 
   async function sync() {
-    setBusy(true);
-    try { await getBackendSrv().post(`${resource}/sync`, {}); setRefresh(v => v + 1); setError(''); }
-    catch (error) { setError(describeError(error)); } finally { setBusy(false); }
+    setSyncing(true);
+    setSyncError(undefined);
+    try {
+      await postSync();
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setSyncError(classifyError(error));
+    } finally {
+      setSyncing(false);
+    }
   }
 
-  const problem = detail?.problem;
-  const generatorURL = problem && safeURL(problem.generatorURL);
-  return <main className={styles.root}>
-    <header className={styles.header}>
-      <div><h1>Problem Desk</h1><p className={styles.muted}>Grafana alert episodes and operator history</p></div>
-      <div className={styles.actions}>
-        {canSync && <Button variant="secondary" icon="sync" disabled={busy} onClick={sync}>Sync source</Button>}
-        {canSync && <a href={`${config.appSubUrl}/plugins/${pluginId}/configuration`}>Configuration</a>}
-      </div>
-    </header>
+  function applyFilters(event: React.FormEvent) {
+    event.preventDefault();
+    const key = labelKeyDraft;
+    const value = labelValueDraft;
+    if (!validLabelFilter(key, value)) {
+      setFilterError(!key && value ? m.filters.labelPairError : language === 'ru'
+        ? 'Метка не должна превышать 256 байт, значение — 1024 байта.'
+        : 'Label must be at most 256 bytes and value at most 1024 bytes.');
+      return;
+    }
+    setFilterError('');
+    navigate({
+      ...queryRef.current,
+      search: searchDraft.trim(),
+      host: hostDraft.trim(),
+      assignee: assigneeDraft.trim(),
+      labelKey: key,
+      labelValue: value,
+      labelKeyPresent: key !== '',
+      labelValuePresent: key !== '',
+      offset: 0,
+    });
+  }
 
-    {error && <Alert title="Could not refresh problems" severity="error">{error} Previously loaded data may be stale.</Alert>}
-    {listing?.source?.error && <Alert title="Source unavailable — states may be stale" severity="warning">{listing.source.error} Problems are not marked recovered when source requests fail.</Alert>}
+  function resetAllFilters() {
+    setFilterError('');
+    setSearchDraft('');
+    setHostDraft('');
+    setAssigneeDraft('');
+    setLabelKeyDraft('');
+    setLabelValueDraft('');
+    navigate(resetFilters(queryRef.current));
+  }
 
-    <form className={styles.filters} onSubmit={e => { e.preventDefault(); setOffset(0); setSubmittedSearch(search.trim()); }}>
-      <Field label="State"><Select aria-label="State" width={24} value={state} options={[{ label: 'Active', value: 'active' }, { label: 'Recovered', value: 'recovered' }, { label: 'All episodes', value: 'all' }]}
-        onChange={option => { setState(option.value || 'active'); setOffset(0); }} /></Field>
-      <Field label="Severity"><Select aria-label="Severity" width={24} value={severity} allowCustomValue onCreateOption={value => { setSeverity(value); setOffset(0); }} options={[{ label: 'All severities', value: '' }, { label: 'Critical', value: 'critical' }, { label: 'Warning', value: 'warning' }, { label: 'Info', value: 'info' }]}
-        onChange={option => { setSeverity(option.value || ''); setOffset(0); }} /></Field>
-      <Field label="Search host, rule or labels" className={styles.search}><Input aria-label="Search problems" placeholder="Host, rule, service…" value={search} onChange={e => setSearch(e.currentTarget.value)} /></Field>
-      <Button variant="secondary" type="submit" icon="search">Search</Button>
-    </form>
+  function chooseRange(value: RangePreset) {
+    if (value === 'custom') {
+      const currentWindow = rangeWindow(queryRef.current, new Date());
+      setCustomOpen(true);
+      setRangeError('');
+      if (currentWindow) {
+        navigate({
+          ...queryRef.current,
+          range: 'custom',
+          from: currentWindow.from.toISOString(),
+          to: currentWindow.to.toISOString(),
+          offset: 0,
+        });
+      }
+      return;
+    }
+    setCustomOpen(false);
+    setRangeError('');
+    navigate({ ...queryRef.current, range: value, from: '', to: '', offset: 0 });
+  }
 
-    <div className={styles.meta} role="status">
-      <span>{listing ? `${listing.total} matching episodes` : 'Loading problems…'}</span>
-      <span>Last successful source sync: {time(listing?.source?.lastSuccess || '')}</span>
-      <span>Times use your browser&apos;s timezone</span>
-    </div>
+  function applyCustomRange() {
+    const from = dateTimeLocalToISO(rangeFromDraft);
+    const to = dateTimeLocalToISO(rangeToDraft);
+    if (!from || !to) {
+      setRangeError(m.range.invalidDate);
+      return;
+    }
+    const validation = validateCustomRange(from, to, queryRef.current.view);
+    if (validation === 'invalid') {
+      setRangeError(m.range.invalidDate);
+      return;
+    }
+    if (validation === 'order') {
+      setRangeError(m.range.invalidOrder);
+      return;
+    }
+    if (validation === 'too-long') {
+      setRangeError(m.range.tooLong);
+      return;
+    }
+    setRangeError('');
+    navigate({ ...queryRef.current, range: 'custom', from, to, offset: 0 });
+  }
 
-    <div className={styles.layout}>
-      <section className={styles.list} aria-label="Problems">
-        {!listing && !error && <LoadingPlaceholder text="Loading problems…" />}
-        {listing?.problems.length === 0 && <div className={styles.empty}><h2>No matching episodes</h2><p>Change the filters or wait for the next source sync. Only observed firing alerts are collected; pending alerts and earlier history are not imported.</p></div>}
-        {(listing?.problems.length || 0) > 0 && <div className={styles.tableWrap}><table className={styles.table}>
-          <thead><tr><th>Severity</th><th>Problem / target</th><th>State</th><th>Started</th><th>Owner / acknowledgement</th></tr></thead>
-          <tbody>{listing?.problems.map(item => <tr key={item.id} className={selected === item.id ? styles.selected : ''}>
-            <td><span className={styles.severity(item.labels.severity)}>{item.labels.severity || 'Unspecified'}</span></td>
-            <td><Button variant="secondary" fill="text" onClick={() => open(item)}>{problemTitle(item)}</Button><div className={styles.target}>{targetName(item)}</div></td>
-            <td>{item.status === 'active' ? 'Active' : 'Recovered'}</td>
-            <td>{time(item.startsAt)}</td>
-            <td>{item.assignee || 'Unassigned'}<div className={styles.muted}>{item.acknowledgedBy ? `ACK · ${item.acknowledgedBy}` : 'Not acknowledged'}</div></td>
-          </tr>)}</tbody>
-        </table></div>}
-        <div className={styles.pagination}>
-          <Button variant="secondary" disabled={offset === 0} onClick={() => setOffset(v => Math.max(0, v - pageSize))}>Previous</Button>
-          <span>{listing?.total ? `${offset + 1}–${Math.min(offset + pageSize, listing.total)} of ${listing.total}` : '0 episodes'}</span>
-          <Button variant="secondary" disabled={!listing || offset + pageSize >= listing.total} onClick={() => setOffset(v => v + pageSize)}>Next</Button>
+  function applySingleFilter(patch: Partial<WorkspaceQuery>) {
+    setFilterError('');
+    navigate({ ...queryRef.current, ...patch, offset: 0 });
+  }
+
+  function changeView(view: View) {
+    setFilterError('');
+    navigate(withView(queryRef.current, view));
+  }
+
+  function exportPage() {
+    if (!listing?.problems.length) {
+      return;
+    }
+    const headers = [
+      m.table.severity,
+      m.table.problem,
+      m.table.status,
+      m.table.started,
+      m.table.duration,
+      m.table.owner,
+      m.table.ack,
+    ];
+    const rows = listing.problems.map((problem) => [
+      severityLabel(problem),
+      problemTitle(problem) || m.table.untitled,
+      problem.status === 'active' ? m.status.active : m.status.recovered,
+      formatDate(problem.startsAt),
+      (() => {
+        const duration = elapsedMs(problem, Date.now());
+        return duration === undefined ? '—' : formatDuration(duration);
+      })(),
+      problem.assignee || m.filters.unassigned,
+      problem.acknowledgedBy ? m.ack.acknowledgedBy(problem.acknowledgedBy) : m.ack.notAcknowledged,
+    ]);
+    downloadCSV(`problem-desk-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(headers, rows));
+  }
+
+  const summary = listing?.summary ?? {
+    active: 0,
+    recovered: 0,
+    acknowledged: 0,
+    unacknowledged: 0,
+    unassigned: 0,
+    critical: 0,
+    warning: 0,
+  };
+  const total = listing?.total ?? 0;
+  const now = lastLoadedAt || Date.now();
+  const windowRange = rangeWindow(query, new Date(lastLoadedAt || Date.now()));
+  const windowLabel = windowRange
+    ? m.range.window(formatDate(windowRange.from.toISOString()), formatDate(windowRange.to.toISOString()))
+    : '';  const activeFilters = activeFilterCount(query);
+  const rangeOptions: Array<SelectableValue<RangePreset>> = [
+    { label: m.range.oneHour, value: '1h' },
+    { label: m.range.twentyFourHours, value: '24h' },
+    { label: m.range.sevenDays, value: '7d' },
+    { label: m.range.thirtyDays, value: '30d' },
+    { label: m.range.custom, value: 'custom' },
+  ];
+  const severityOptions: Array<SelectableValue<string>> = [
+    { label: m.filters.severityAll, value: '' },
+    { label: m.severity.critical, value: 'critical' },
+    { label: m.severity.warning, value: 'warning' },
+    { label: m.severity.info, value: 'info' },
+  ];
+  if (query.severity && !severityOptions.some((option) => option.value === query.severity)) {
+    severityOptions.push({ label: query.severity, value: query.severity });
+  }
+  const assignmentOptions: Array<SelectableValue<WorkspaceQuery['assignment']>> = [
+    { label: m.filters.assignmentAll, value: 'all' },
+    { label: m.filters.assigned, value: 'assigned' },
+    { label: m.filters.unassigned, value: 'unassigned' },
+  ];
+  const ackOptions: Array<SelectableValue<WorkspaceQuery['ack']>> = [
+    { label: m.filters.ackAll, value: 'all' },
+    { label: m.filters.acknowledged, value: 'acknowledged' },
+    { label: m.filters.unacknowledged, value: 'unacknowledged' },
+  ];
+  const stateOptions: Array<SelectableValue<WorkspaceQuery['state']>> = [
+    { label: m.filters.stateAll, value: 'all' },
+    { label: m.filters.stateActive, value: 'active' },
+    { label: m.filters.stateRecovered, value: 'recovered' },
+  ];
+  const sortOptions: Array<SelectableValue<SortKey>> = [
+    { label: m.filters.sortSeverity, value: 'severity' },
+    { label: m.filters.sortStarted, value: 'started' },
+    { label: m.filters.sortDuration, value: 'duration' },
+    { label: m.filters.sortRecovered, value: 'recovered' },
+  ];
+  const orderOptions: Array<SelectableValue<WorkspaceQuery['order']>> = [
+    { label: m.filters.orderDesc, value: 'desc' },
+    { label: m.filters.orderAsc, value: 'asc' },
+  ];
+  const pageSizeOptions: Array<SelectableValue<WorkspaceQuery['limit']>> = [
+    { label: '25', value: 25 },
+    { label: '50', value: 50 },
+    { label: '100', value: 100 },
+  ];
+  const hostOptions = (listing?.facets.hosts ?? []).map((value) => ({ label: value, value }));
+  const assigneeOptions = (listing?.facets.assignees ?? []).map((value) => ({ label: value, value }));
+  const labelOptions = (listing?.facets.labelKeys ?? []).map((value) => ({ label: value, value }));
+  if (query.labelKey && !labelOptions.some((option) => option.value === query.labelKey)) {
+    labelOptions.unshift({ label: query.labelKey, value: query.labelKey });
+  }
+  const empty = listing && listing.total === 0 && !listLoading;
+
+  return (
+    <main className={styles.page}>
+      <header className={styles.header}>
+        <div className={styles.heading}>
+          <div className={styles.titleRow}>
+            <Icon name="bell" size="lg" />
+            <h1 className={styles.h1}>{m.app.title}</h1>
+          </div>
+          <p className={styles.subtitle}>{m.app.subtitle}</p>
         </div>
+        <div className={styles.headerActions}>
+          <Select
+            aria-label={m.app.language}
+            width={13}
+            value={language}
+            options={[
+              { label: 'English', value: 'en' },
+              { label: 'Русский', value: 'ru' },
+            ]}
+            onChange={(option) => option.value && setLanguage(option.value as Language)}
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="clock-nine"
+            title={m.app.timeZone}
+            aria-label={`${m.app.timeZone}: ${zoneLabel}`}
+            onClick={() => setTimeZone(timeZone === 'UTC' ? 'local' : 'UTC')}
+          >
+            {zoneLabel}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="sync"
+            disabled={refreshing}
+            onClick={() => setRefreshToken((value) => value + 1)}
+          >
+            {refreshing ? m.common.refreshing : m.app.refresh}
+          </Button>
+          {canSync && (
+            <Button variant="secondary" size="sm" icon="cloud-upload" disabled={syncing} onClick={() => void sync()}>
+              {syncing ? m.app.syncing : m.app.syncSource}
+            </Button>
+          )}
+          <a className={styles.configLink} href={`${config.appSubUrl}/plugins/${pluginId}/configuration`}>
+            <Icon name="cog" size="sm" />
+            {m.app.configuration}
+          </a>
+        </div>
+      </header>
+
+      <TabsBar className={styles.tabs} aria-label={m.tabs.label}>
+        <Tab
+          label={m.tabs.problems}
+          icon="fire"
+          active={query.view === 'problems'}
+          tooltip={m.tabs.problemsHint}
+          counter={query.view === 'problems' ? (listing ? total : null) : null}
+          onChangeTab={() => changeView('problems')}
+        />
+        <Tab
+          label={m.tabs.recent}
+          icon="clock-nine"
+          active={query.view === 'recent'}
+          tooltip={m.tabs.recentHint}
+          onChangeTab={() => changeView('recent')}
+        />
+        <Tab
+          label={m.tabs.history}
+          icon="history"
+          active={query.view === 'history'}
+          tooltip={m.tabs.historyHint}
+          onChangeTab={() => changeView('history')}
+        />
+      </TabsBar>
+
+      <section className={styles.stats} aria-label={m.filters.label}>
+        {[
+          { label: m.summary.matchingLabel, value: listing ? total : '—', tone: '' },
+          { label: m.summary.active, value: listing ? summary.active : '—', tone: 'critical' },
+          { label: m.summary.recovered, value: listing ? summary.recovered : '—', tone: 'success' },
+          { label: m.summary.critical, value: listing ? summary.critical : '—', tone: 'critical' },
+          { label: m.summary.warning, value: listing ? summary.warning : '—', tone: 'warning' },
+          { label: m.summary.acknowledged, value: listing ? summary.acknowledged : '—', tone: 'success' },
+          { label: m.summary.unacknowledged, value: listing ? summary.unacknowledged : '—', tone: '' },
+          { label: m.summary.unassigned, value: listing ? summary.unassigned : '—', tone: '' },
+        ].map((stat) => (
+          <div className={styles.stat} key={stat.label}>
+            <span className={styles.statLabel}>{stat.label}</span>
+            <strong className={stat.tone ? styles.statValue(stat.tone) : styles.statValuePlain}>{stat.value}</strong>
+          </div>
+        ))}
       </section>
 
-      <section className={styles.detail} aria-label="Problem details">
-        {!selected && <div className={styles.empty}><h2>Select a problem</h2><p>Open an episode to read the discussion, inspect its labels or acknowledge it.</p></div>}
-        {detailError && <Alert title="Problem action failed" severity="error">{detailError}</Alert>}
-        {selected && !problem && !detailError && <LoadingPlaceholder text="Loading episode…" />}
-        {problem && <>
-          <h2>{problemTitle(problem)}</h2><p>{targetName(problem)}</p>
-          <dl className={styles.facts}><dt>State</dt><dd>{problem.status}</dd><dt>Started</dt><dd>{time(problem.startsAt)}</dd><dt>Recovered</dt><dd>{time(problem.endsAt)}</dd><dt>Acknowledged by</dt><dd>{problem.acknowledgedBy || 'Nobody'}</dd><dt>Acknowledged at</dt><dd>{time(problem.acknowledgedAt)}</dd></dl>
-          {generatorURL && <p><a href={generatorURL} target="_blank" rel="noopener noreferrer">Open source rule ↗</a></p>}
-          {problem.annotations.description && <p className={styles.prose}>{problem.annotations.description}</p>}
-          {canWrite ? <div className={styles.actions}><Button variant="secondary" disabled={busy} onClick={() => mutate(`/problems/${encodeURIComponent(problem.id)}/${problem.acknowledgedBy ? 'unack' : 'ack'}`, {})}>
-            {problem.acknowledgedBy ? 'Remove acknowledgement' : 'Acknowledge'}</Button><span className={styles.muted}>Does not mute notifications or resolve the alert.</span></div> : <p className={styles.muted}>Viewer access: read-only. Editors and administrators can comment and acknowledge.</p>}
+      <DeepLinkNotice
+        state={resolveState}
+        startsAt={query.startsAt}
+        onRetry={() => setResolveAttempt((value) => value + 1)}
+      />
 
-          {canWrite && <form className={styles.filters} key={`${problem.id}:${problem.assignee || ''}`} onSubmit={e => {
-            e.preventDefault();
-            const assignee = String(new FormData(e.currentTarget).get('assignee') || '').trim();
-            void mutate(`/problems/${encodeURIComponent(problem.id)}/assign`, { assignee });
-          }}>
-            <Field label="Owner label" description="A Grafana login or team name; this does not grant permissions.">
-              <Input aria-label="Owner label" name="assignee" defaultValue={problem.assignee || ''} maxLength={200} placeholder="Unassigned" />
+      {syncError && (
+        <Alert title={m.errors.syncTitle} severity="error">
+          {errorText(syncError, m)}
+        </Alert>
+      )}
+      {listError && (
+        <Alert title={m.errors.listTitle} severity="error">
+          <p>{errorText(listError, m)}</p>
+          <Button size="sm" variant="secondary" onClick={() => setRefreshToken((value) => value + 1)}>
+            {m.common.retry}
+          </Button>
+        </Alert>
+      )}
+      {listing?.source.error && (
+        <Alert title={m.source.staleTitle} severity="warning">
+          {m.source.staleBody}
+        </Alert>
+      )}
+
+      <section className={styles.filtersPanel} aria-label={m.filters.label}>
+        <div className={styles.filterHeading}>
+          <span className={styles.filterTitle}>
+            <Icon name="filter" size="sm" />
+            {m.filters.label}
+            {activeFilters > 0 && <span className={styles.filterCount}>{activeFilters}</span>}
+          </span>
+          <span className={styles.rangeHint} title={m.range.rolling}>
+            {windowLabel && (
+              <>
+                <Icon name="calendar-alt" size="sm" /> {windowLabel}
+              </>
+            )}
+          </span>
+        </div>
+
+        {query.view !== 'problems' && (
+          <div className={styles.rangeRow}>
+            <Field label={m.range.label} className={styles.rangeField}>
+              <RadioButtonGroup<RangePreset>
+                options={rangeOptions}
+                value={query.range}
+                onChange={(value) => value && chooseRange(value)}
+                aria-label={m.range.label}
+              />
             </Field>
-            <Button variant="secondary" type="submit" disabled={busy}>Save owner</Button>
-          </form>}
+            {customOpen && (
+              <div className={styles.customRange}>
+                <Field label={m.range.from}>
+                  <Input
+                    type="datetime-local"
+                    aria-label={m.range.from}
+                    value={rangeFromDraft}
+                    onChange={(event) => setRangeFromDraft(event.currentTarget.value)}
+                  />
+                </Field>
+                <Field label={m.range.to}>
+                  <Input
+                    type="datetime-local"
+                    aria-label={m.range.to}
+                    value={rangeToDraft}
+                    onChange={(event) => setRangeToDraft(event.currentTarget.value)}
+                  />
+                </Field>
+                <Button size="sm" variant="secondary" icon="calendar-alt" onClick={applyCustomRange}>
+                  {m.range.apply}
+                </Button>
+              </div>
+            )}
+            {rangeError && <span className={styles.fieldError}>{rangeError}</span>}
+          </div>
+        )}
 
-          <h3>Discussion</h3>
-          {!detail.comments?.length && <p className={styles.muted}>No comments on this episode yet.</p>}
-          {detail.comments?.map(comment => <article className={styles.comment} key={comment.id}><strong>{comment.author}</strong><time className={styles.muted}> · {time(comment.createdAt)}</time><p className={styles.prose}>{comment.body}</p></article>)}
-          {canWrite && <form onSubmit={async e => { e.preventDefault(); if (await mutate(`/problems/${encodeURIComponent(problem.id)}/comments`, { body: draft.trim() })) { setDraft(''); } }}>
-            <Field label="Comment on this episode"><TextArea aria-label="Comment on this episode" rows={4} maxLength={5000} value={draft} onChange={e => setDraft(e.currentTarget.value)} placeholder="What did you investigate or change?" /></Field>
-            <Button type="submit" disabled={busy || !draft.trim()}>Add comment</Button>
-          </form>}
-          <h3>Activity</h3>
-          {!detail.events?.length && <p className={styles.muted}>No operator actions recorded.</p>}
-          {detail.events?.map(event => <p key={event.id}><strong>{event.author}</strong> · {event.kind}<br /><small className={styles.muted}>{time(event.createdAt)}</small>{event.body && <span className={styles.prose}> · {event.body}</span>}</p>)}
-          <details><summary>Labels and annotations</summary><dl className={styles.labels}>{Object.entries(problem.labels).map(([key, value]) => <React.Fragment key={key}><dt>{key}</dt><dd>{value}</dd></React.Fragment>)}</dl><p className={styles.muted}>Episode {problem.id}</p></details>
-        </>}
+        <form onSubmit={applyFilters}>
+          <div className={styles.filterRow}>
+            <Field label={m.filters.search} className={styles.searchField}>
+              <Input
+                type="search"
+                aria-label={m.filters.search}
+                placeholder={m.filters.searchPlaceholder}
+                value={searchDraft}
+                onChange={(event) => setSearchDraft(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label={m.filters.severity} className={styles.field}>
+              <Select
+                aria-label={m.filters.severity}
+                options={severityOptions}
+                value={query.severity}
+                allowCustomValue
+                onCreateOption={(value) => applySingleFilter({ severity: value })}
+                onChange={(option) => applySingleFilter({ severity: option.value ?? '' })}
+              />
+            </Field>
+            <Field label={m.filters.host} className={styles.field}>
+              <Input
+                aria-label={m.filters.host}
+                list="problem-desk-host-list"
+                placeholder={m.filters.hostPlaceholder}
+                value={hostDraft}
+                onChange={(event) => setHostDraft(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label={m.filters.assignee} className={styles.field}>
+              <Input
+                aria-label={m.filters.assignee}
+                list="problem-desk-assignee-list"
+                placeholder={m.filters.assigneePlaceholder}
+                value={assigneeDraft}
+                onChange={(event) => setAssigneeDraft(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label={m.filters.assignment} className={styles.field}>
+              <Select
+                aria-label={m.filters.assignment}
+                options={assignmentOptions}
+                value={query.assignment}
+                onChange={(option) => applySingleFilter({ assignment: option.value ?? 'all' })}
+              />
+            </Field>
+            <Field label={m.filters.ack} className={styles.field}>
+              <Select
+                aria-label={m.filters.ack}
+                options={ackOptions}
+                value={query.ack}
+                onChange={(option) => applySingleFilter({ ack: option.value ?? 'all' })}
+              />
+            </Field>
+            {query.view !== 'problems' && (
+              <Field label={m.filters.state} className={styles.field}>
+                <Select
+                  aria-label={m.filters.state}
+                  options={stateOptions}
+                  value={query.state}
+                  onChange={(option) => applySingleFilter({ state: option.value ?? 'all' })}
+                />
+              </Field>
+            )}
+          </div>
+          <div className={styles.filterRow}>
+            <Field label={m.filters.labelKey} className={styles.field}>
+              <Input
+                aria-label={m.filters.labelKey}
+                placeholder={m.filters.labelKeyPlaceholder}
+                list="problem-desk-label-list"
+                value={labelKeyDraft}
+                onChange={(event) => setLabelKeyDraft(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label={m.filters.labelValue} className={styles.field}>
+              <Input
+                aria-label={m.filters.labelValue}
+                placeholder={m.filters.labelValuePlaceholder}
+                value={labelValueDraft}
+                onChange={(event) => setLabelValueDraft(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label={m.filters.sort} className={styles.field}>
+              <Select
+                aria-label={m.filters.sort}
+                options={sortOptions}
+                value={query.sort}
+                onChange={(option) => applySingleFilter({ sort: option.value ?? 'severity' })}
+              />
+            </Field>
+            <Field label={m.filters.order} className={styles.field}>
+              <Select
+                aria-label={m.filters.order}
+                options={orderOptions}
+                value={query.order}
+                onChange={(option) => applySingleFilter({ order: option.value ?? 'desc' })}
+              />
+            </Field>
+            <div className={styles.filterActions}>
+              <Button type="submit" size="sm">
+                {m.filters.apply}
+              </Button>
+              <Button type="button" size="sm" variant="secondary" onClick={resetAllFilters} disabled={activeFilters === 0}>
+                {m.filters.reset}
+              </Button>
+            </div>
+          </div>
+          {filterError && <div className={styles.fieldError}>{filterError}</div>}
+          {(hostOptions.length > 0 || assigneeOptions.length > 0 || labelOptions.length > 0) && (
+            <>
+              <datalist id="problem-desk-host-list">
+                {hostOptions.map((option) => (
+                  <option value={option.value} key={option.value} />
+                ))}
+              </datalist>
+              <datalist id="problem-desk-assignee-list">
+                {assigneeOptions.map((option) => (
+                  <option value={option.value} key={option.value} />
+                ))}
+              </datalist>
+              <datalist id="problem-desk-label-list">
+                {labelOptions.map((option) => (
+                  <option value={option.value} key={option.value} />
+                ))}
+              </datalist>
+            </>
+          )}
+        </form>
       </section>
+
+      <div className={styles.meta} role="status" aria-live="polite">
+        <span>
+          {listing ? m.summary.matching(total) : m.common.loading}
+          {refreshing && <span className={styles.refreshing}> · {m.common.refreshing}</span>}
+        </span>
+        <span>
+          {listing
+            ? m.source.lastSuccess(
+                listing.source.lastSuccess ? formatDate(listing.source.lastSuccess) : m.source.never
+              )
+            : '—'}
+        </span>
+        {lastLoadedAt > 0 && <span>{m.source.updated(formatRelative(new Date(lastLoadedAt).toISOString()))}</span>}
+        <span title={m.app.timeZone}>{zoneLabel}</span>
+      </div>
+
+      <section className={styles.tableCard} aria-busy={listLoading || refreshing}>
+        <div className={styles.tableToolbar}>
+          <span className={styles.tableToolbarTitle}>
+            <Icon name="list-ul" size="sm" />
+            {m.table.caption}
+          </span>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="download-alt"
+            disabled={!listing?.problems.length}
+            onClick={exportPage}
+          >
+            {m.csv.exportPage}
+          </Button>
+        </div>
+        {listLoading && !listing && <TableSkeleton />}
+        {empty && (
+          <div className={styles.empty}>
+            <Icon name="check-circle" size="xl" />
+            <h2>{emptyTitle(query.view, m)}</h2>
+            <p>{emptyBody(query.view, m)}</p>
+            {activeFilters > 0 && (
+              <Button size="sm" variant="secondary" onClick={resetAllFilters}>
+                {m.empty.resetFilters}
+              </Button>
+            )}
+          </div>
+        )}
+        {listing && listing.problems.length > 0 && (
+          <ProblemTable problems={listing.problems} selectedId={selectedId} now={now} onOpen={openProblem} />
+        )}
+        {listing && (
+          <div className={styles.pagination}>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={query.offset === 0}
+              onClick={() => navigate({ ...queryRef.current, offset: Math.max(0, query.offset - query.limit) })}
+            >
+              {m.pagination.previous}
+            </Button>
+            <span aria-live="polite">
+              {total === 0
+                ? m.summary.matching(0)
+                : m.pagination.range(query.offset + 1, Math.min(query.offset + query.limit, total), total)}
+              {' · '}
+              {m.pagination.page(Math.floor(query.offset / query.limit) + 1, pageCount(total, query.limit))}
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={query.offset + query.limit >= total}
+              onClick={() => navigate({ ...queryRef.current, offset: query.offset + query.limit })}
+            >
+              {m.pagination.next}
+            </Button>
+            <span className={styles.pageSize}>
+              <span>{m.pagination.pageSize}</span>
+              <Select<WorkspaceQuery['limit']>
+                aria-label={m.pagination.pageSize}
+                width={8}
+                options={pageSizeOptions}
+                value={query.limit}
+                onChange={(option) =>
+                  option.value && navigate({ ...queryRef.current, limit: option.value, offset: 0 })
+                }
+              />
+            </span>
+          </div>
+        )}
+      </section>
+
+      <DetailDrawer
+        selectedId={selectedId}
+        detail={detail}
+        loading={detailLoading}
+        error={detailError}
+        actionError={actionError}
+        busyAction={busyAction}
+        draft={draft}
+        ownerDraft={ownerDraft}
+        canWrite={canWrite}
+        onDraftChange={setDraft}
+        onOwnerDraftChange={setOwnerDraft}
+        onClose={closeDrawer}
+        onRetry={() => setDetailAttempt((value) => value + 1)}
+        onAck={acknowledge}
+        onUnack={unacknowledge}
+        onAssign={assignOwner}
+        onComment={addComment}
+      />
+    </main>
+  );
+}
+
+function emptyTitle(view: View, messages: ReturnType<typeof useI18n>['messages']): string {
+  if (view === 'recent') return messages.empty.recentTitle;
+  if (view === 'history') return messages.empty.historyTitle;
+  return messages.empty.problemsTitle;
+}
+
+function emptyBody(view: View, messages: ReturnType<typeof useI18n>['messages']): string {
+  if (view === 'recent') return messages.empty.recentBody;
+  if (view === 'history') return messages.empty.historyBody;
+  return messages.empty.problemsBody;
+}
+
+function TableSkeleton() {
+  const styles = useStyles2(getStyles);
+  return (
+    <div className={styles.skeleton} aria-hidden="true">
+      {Array.from({ length: 8 }).map((_, index) => (
+        <div className={styles.skeletonRow} key={index} />
+      ))}
     </div>
-  </main>;
+  );
+}
+
+function DeepLinkNotice({
+  state,
+  startsAt,
+  onRetry,
+}: {
+  state: ResolveState;
+  startsAt: string;
+  onRetry: () => void;
+}) {
+  const styles = useStyles2(getStyles);
+  const { messages: m, formatDate } = useI18n();
+  if (state.status === 'idle') {
+    return null;
+  }
+  if (state.status === 'resolving') {
+    return (
+      <div className={styles.linkNotice} role="status">
+        <Spinner size={16} />
+        <span>{m.deepLink.resolving}</span>
+      </div>
+    );
+  }
+  if (state.status === 'not-found') {
+    return (
+      <Alert title={m.deepLink.notFoundTitle} severity="warning">
+        <p>{startsAt ? m.deepLink.notFoundBodyStart(formatDate(startsAt)) : m.deepLink.notFoundBody}</p>
+        <Button size="sm" variant="secondary" onClick={onRetry}>
+          {m.deepLink.retry}
+        </Button>
+      </Alert>
+    );
+  }
+  if (state.status === 'ambiguous') {
+    return (
+      <Alert title={m.deepLink.ambiguousTitle} severity="error">
+        {m.deepLink.ambiguousBody}
+      </Alert>
+    );
+  }
+  if (state.status === 'invalid') {
+    return (
+      <Alert title={m.deepLink.invalidTitle} severity="error">
+        {state.error === 'fingerprint' ? m.deepLink.invalidFingerprintBody : m.deepLink.invalidMatchersBody}
+      </Alert>
+    );
+  }
+  return (
+    <Alert title={m.deepLink.errorTitle} severity="error">
+      <p>{m.deepLink.errorBody}</p>
+      <Button size="sm" variant="secondary" onClick={onRetry}>
+        {m.deepLink.retry}
+      </Button>
+    </Alert>
+  );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  root: css`padding: ${theme.spacing(3)}; max-width: 1800px; margin: auto; h1 {margin: 0;} h3 {margin-top: ${theme.spacing(3)};} @media(max-width: 600px) {padding: ${theme.spacing(1)};}`,
-  header: css`display:flex; align-items:center; justify-content:space-between; gap:${theme.spacing(2)}; flex-wrap:wrap; margin-bottom:${theme.spacing(3)};`,
-  actions: css`display:flex; align-items:center; gap:${theme.spacing(2)}; flex-wrap:wrap;`,
-  muted: css`color:${theme.colors.text.secondary};`,
-  filters: css`display:flex; align-items:flex-end; gap:${theme.spacing(2)}; flex-wrap:wrap; margin-bottom:${theme.spacing(2)}; >button {margin-bottom:${theme.spacing(2)};}`,
-  search: css`flex:1; min-width:220px;`,
-  meta: css`display:flex; justify-content:space-between; gap:${theme.spacing(2)}; flex-wrap:wrap; color:${theme.colors.text.secondary}; margin-bottom:${theme.spacing(2)};`,
-  layout: css`display:grid; grid-template-columns:minmax(0, 3fr) minmax(340px, 2fr); gap:${theme.spacing(2)}; align-items:start; @media(max-width:1100px) {grid-template-columns:minmax(0,1fr);}`,
-  list: css`min-width:0; border:1px solid ${theme.colors.border.weak}; border-radius:${theme.shape.radius.default};`,
-  tableWrap: css`overflow-x:auto;`,
-  table: css`width:100%; border-collapse:collapse; th,td {text-align:left; padding:${theme.spacing(1.5)}; border-bottom:1px solid ${theme.colors.border.weak}; vertical-align:top;} th {color:${theme.colors.text.secondary}; font-weight:500;} td button {height:auto; white-space:normal; text-align:left; padding:0;} th:first-child {width:110px;}`,
-  target: css`margin-top:${theme.spacing(0.5)}; overflow-wrap:anywhere; color:${theme.colors.text.secondary};`,
-  selected: css`background:${theme.colors.action.selected};`,
-  severity: (severity: string) => css`font-weight:600; color:${severity === 'critical' ? theme.colors.error.text : severity === 'warning' ? theme.colors.warning.text : severity === 'info' ? theme.colors.info.text : theme.colors.text.primary};`,
-  empty: css`padding:${theme.spacing(3)}; p {color:${theme.colors.text.secondary};}`,
-  pagination: css`padding:${theme.spacing(1.5)}; display:flex; align-items:center; justify-content:space-between; gap:${theme.spacing(1)};`,
-  detail: css`min-width:0; padding:${theme.spacing(2)}; border:1px solid ${theme.colors.border.weak}; border-radius:${theme.shape.radius.default}; h2 {overflow-wrap:anywhere;}`,
-  facts: css`display:grid; grid-template-columns:140px minmax(0,1fr); gap:${theme.spacing(1)}; dt {color:${theme.colors.text.secondary};} dd {margin:0; overflow-wrap:anywhere;}`,
-  comment: css`border-left:2px solid ${theme.colors.border.medium}; padding-left:${theme.spacing(1.5)}; margin-bottom:${theme.spacing(2)};`,
-  prose: css`white-space:pre-wrap; overflow-wrap:anywhere;`,
-  labels: css`display:grid; grid-template-columns:minmax(80px,1fr) minmax(0,2fr); gap:${theme.spacing(1)}; padding-top:${theme.spacing(2)}; dd {margin:0; overflow-wrap:anywhere;}`,
+  page: css`
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 1920px;
+    min-width: 0;
+    margin: 0 auto;
+    padding: ${theme.spacing(2.5)};
+    @media (max-width: 640px) {
+      padding: ${theme.spacing(1.5)};
+    }
+  `,
+  header: css`
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: ${theme.spacing(2)};
+    flex-wrap: wrap;
+  `,
+  heading: css`
+    min-width: 240px;
+    flex: 1 1 360px;
+  `,
+  titleRow: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
+    color: ${theme.colors.primary.text};
+  `,
+  h1: css`
+    margin: 0;
+    font-size: ${theme.typography.h3.fontSize};
+    line-height: ${theme.typography.h3.lineHeight};
+  `,
+  subtitle: css`
+    margin: ${theme.spacing(0.5)} 0 0;
+    color: ${theme.colors.text.secondary};
+    max-width: 78ch;
+  `,
+  headerActions: css`
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: ${theme.spacing(1)};
+    flex-wrap: wrap;
+    flex: 0 1 auto;
+  `,
+  configLink: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+    color: ${theme.colors.text.link};
+    white-space: nowrap;
+  `,
+  tabs: css`
+    margin-top: ${theme.spacing(1.5)};
+    overflow-x: auto;
+  `,
+  stats: css`
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    background: ${theme.colors.background.secondary};
+    margin: ${theme.spacing(1.5)} 0;
+    padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
+  `,
+  stat: css`
+    display: flex;
+    align-items: baseline;
+    gap: ${theme.spacing(0.5)};
+    padding: ${theme.spacing(0.5)} ${theme.spacing(1.25)};
+    border-right: 1px solid ${theme.colors.border.weak};
+    &:last-child {
+      border-right: 0;
+    }
+    @media (max-width: 640px) {
+      padding: ${theme.spacing(0.5)} ${theme.spacing(0.75)};
+    }
+  `,
+  statLabel: css`
+    color: ${theme.colors.text.secondary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    white-space: nowrap;
+  `,
+  statValue: (tone: string) => css`
+    font-variant-numeric: tabular-nums;
+    color: ${tone === 'critical'
+      ? theme.colors.error.text
+      : tone === 'warning'
+        ? theme.colors.warning.text
+        : theme.colors.success.text};
+  `,
+  statValuePlain: css`
+    font-variant-numeric: tabular-nums;
+    color: ${theme.colors.text.primary};
+  `,
+  linkNotice: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
+    padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
+    margin-bottom: ${theme.spacing(1.5)};
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    background: ${theme.colors.background.secondary};
+    color: ${theme.colors.text.secondary};
+  `,
+  filtersPanel: css`
+    padding: ${theme.spacing(1.5)};
+    margin-bottom: ${theme.spacing(1)};
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    background: ${theme.colors.background.canvas};
+  `,
+  filterHeading: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: ${theme.spacing(1)};
+    flex-wrap: wrap;
+    margin-bottom: ${theme.spacing(1)};
+  `,
+  filterTitle: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.75)};
+    color: ${theme.colors.text.secondary};
+    font-weight: ${theme.typography.fontWeightMedium};
+  `,
+  filterCount: css`
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: ${theme.colors.primary.main};
+    color: ${theme.colors.primary.contrastText};
+    font-size: 12px;
+  `,
+  rangeHint: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+    color: ${theme.colors.text.secondary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  rangeRow: css`
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: ${theme.spacing(1.5)};
+    margin-bottom: ${theme.spacing(1)};
+  `,
+  rangeField: css`
+    flex: 1 1 420px;
+    min-width: 0;
+    margin-bottom: 0;
+  `,
+  customRange: css`
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: ${theme.spacing(1)};
+    > div {
+      min-width: 160px;
+      margin-bottom: 0;
+    }
+  `,
+  filterRow: css`
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: ${theme.spacing(1)};
+    margin-bottom: ${theme.spacing(1)};
+  `,
+  field: css`
+    flex: 0 1 168px;
+    min-width: 140px;
+    margin-bottom: 0;
+    @media (max-width: 640px) {
+      flex: 1 1 100%;
+    }
+  `,
+  searchField: css`
+    flex: 1 1 260px;
+    min-width: 200px;
+    margin-bottom: 0;
+    @media (max-width: 640px) {
+      flex: 1 1 100%;
+    }
+  `,
+  filterActions: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
+    margin-bottom: 2px;
+    flex-wrap: wrap;
+  `,
+  fieldError: css`
+    color: ${theme.colors.error.text};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    margin: ${theme.spacing(0.5)} 0;
+  `,
+  meta: css`
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: ${theme.spacing(1.5)};
+    color: ${theme.colors.text.secondary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    margin: ${theme.spacing(1)} 0;
+  `,
+  refreshing: css`
+    color: ${theme.colors.text.disabled};
+  `,
+  tableCard: css`
+    min-width: 0;
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    background: ${theme.colors.background.canvas};
+    overflow: hidden;
+  `,
+  tableToolbar: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: ${theme.spacing(1)};
+    flex-wrap: wrap;
+    padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
+    border-bottom: 1px solid ${theme.colors.border.weak};
+  `,
+  tableToolbarTitle: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.75)};
+    color: ${theme.colors.text.secondary};
+    font-weight: ${theme.typography.fontWeightMedium};
+  `,
+  empty: css`
+    padding: ${theme.spacing(6)} ${theme.spacing(3)};
+    text-align: center;
+    color: ${theme.colors.text.secondary};
+    h2 {
+      margin: ${theme.spacing(1.5)} 0 ${theme.spacing(0.5)};
+      color: ${theme.colors.text.primary};
+      font-size: ${theme.typography.h4.fontSize};
+    }
+    p {
+      max-width: 62ch;
+      margin: 0 auto ${theme.spacing(2)};
+    }
+  `,
+  skeleton: css`
+    padding: ${theme.spacing(1.5)};
+  `,
+  skeletonRow: css`
+    height: 42px;
+    margin-bottom: ${theme.spacing(0.75)};
+    border-radius: ${theme.shape.radius.default};
+    background: linear-gradient(
+      90deg,
+      ${theme.colors.background.secondary} 25%,
+      ${theme.colors.action.hover} 50%,
+      ${theme.colors.background.secondary} 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+    @keyframes shimmer {
+      from {
+        background-position: 200% 0;
+      }
+      to {
+        background-position: -200% 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  `,
+  pagination: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: ${theme.spacing(1)};
+    flex-wrap: wrap;
+    padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
+    border-top: 1px solid ${theme.colors.border.weak};
+    color: ${theme.colors.text.secondary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  pageSize: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.75)};
+    white-space: nowrap;
+  `,
 });

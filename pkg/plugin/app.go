@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -156,7 +155,7 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 		}
 	}
 	cleanPath = strings.Trim(cleanPath, "/")
-	queryVals, _ := url.ParseQuery(rawQuery)
+	queryVals, queryErr := url.ParseQuery(rawQuery)
 
 	parts := strings.Split(cleanPath, "/")
 
@@ -165,7 +164,19 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 		if req.Method != http.MethodGet {
 			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		}
+		if queryErr != nil || len(rawQuery) > 16*1024 {
+			return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "invalid query"})
+		}
 		return a.handleGetProblems(ctx, pc.OrgID, queryVals, sender)
+	}
+	if cleanPath == "resolve" {
+		if req.Method != http.MethodGet {
+			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+		if queryErr != nil || len(rawQuery) > 16*1024 {
+			return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "invalid query"})
+		}
+		return a.handleResolve(ctx, pc.OrgID, queryVals, sender)
 	}
 
 	// Route: POST /sync
@@ -222,25 +233,11 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 }
 
 func (a *App) handleGetProblems(ctx context.Context, orgID int64, query url.Values, sender backend.CallResourceResponseSender) error {
-	state := query.Get("state")
-	severity := query.Get("severity")
-	search := query.Get("search")
-
-	limit := 100
-	if lStr := query.Get("limit"); lStr != "" {
-		if l, err := strconv.Atoi(lStr); err == nil && l > 0 && l <= 100 {
-			limit = l
-		}
+	options, err := parseProblemQuery(query, time.Now().UTC())
+	if err != nil {
+		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "invalid query"})
 	}
-
-	offset := 0
-	if oStr := query.Get("offset"); oStr != "" {
-		if o, err := strconv.Atoi(oStr); err == nil && o >= 0 {
-			offset = o
-		}
-	}
-
-	problems, total, err := a.store.GetProblems(ctx, orgID, state, severity, search, limit, offset)
+	resp, err := a.store.GetProblems(ctx, orgID, options)
 	if err != nil {
 		return sendJSON(sender, http.StatusInternalServerError, map[string]string{"error": "failed to list problems"})
 	}
@@ -250,11 +247,7 @@ func (a *App) handleGetProblems(ctx context.Context, orgID int64, query url.Valu
 		return sendJSON(sender, http.StatusInternalServerError, map[string]string{"error": "failed to get source status"})
 	}
 
-	resp := models.ProblemsResponse{
-		Problems: problems,
-		Total:    total,
-		Source:   syncStatus,
-	}
+	resp.Source = syncStatus
 
 	return sendJSON(sender, http.StatusOK, resp)
 }

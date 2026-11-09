@@ -163,7 +163,11 @@ func NormalizeTimestamp(raw string) (string, error) {
 			return "", fmt.Errorf("invalid timestamp %q: %w", raw, err)
 		}
 	}
-	return t.UTC().Format(time.RFC3339Nano), nil
+	t = t.UTC()
+	if t.Year() < 0 || t.Year() > 9999 {
+		return "", errors.New("timestamp outside RFC3339 UTC range")
+	}
+	return t.Format(time.RFC3339Nano), nil
 }
 
 func sanitizeError(err error, token string) string {

@@ -2,9 +2,16 @@ package storage
 
 import (
 	"context"
+	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 	"testing"
 	"time"
 )
+
+func getProblems(s *Store, ctx context.Context, org int64, state, severity, search string, limit, offset int) ([]models.Problem, int, error) {
+	now := time.Now().UTC()
+	r, err := s.GetProblems(ctx, org, ProblemQuery{View: "history", State: state, Severity: severity, Search: search, Sort: "started", Order: "desc", From: now.AddDate(-200, 0, 0), To: now.AddDate(200, 0, 0), Now: now, Limit: limit, Offset: offset})
+	return r.Problems, r.Total, err
+}
 
 func TestOperatorMutationRollback(t *testing.T) {
 	cases := []struct {
@@ -47,7 +54,7 @@ func TestOperatorMutationRollback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			problems, _, err := store.GetProblems(ctx, 1, "all", "", "", 10, 0)
+			problems, _, err := getProblems(store, ctx, 1, "all", "", "", 10, 0)
 			if err != nil || len(problems) != 1 {
 				t.Fatalf("fixture not created: %v", err)
 			}
@@ -90,7 +97,7 @@ func TestSeverityFilterIsLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, total, err := store.GetProblems(ctx, 1, "all", "crit%", "", 10, 0)
+	_, total, err := getProblems(store, ctx, 1, "all", "crit%", "", 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
