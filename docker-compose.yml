@@ -1,0 +1,21 @@
+services:
+  grafana:
+    image: grafana/grafana:13.3.0
+    network_mode: bridge
+    ports:
+      - '127.0.0.1:13010:3000'
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: mlimarenko-problemdesk-app
+    volumes:
+      - ./dist:/var/lib/grafana/plugins/mlimarenko-problemdesk-app:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost:3000/api/health']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  grafana-data:

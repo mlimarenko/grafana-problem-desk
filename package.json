@@ -1,0 +1,32 @@
+{
+  "name": "grafana-problem-desk",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Organization-shared problem episodes, comments and acknowledgement inside Grafana",
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@emotion/css": "11.13.5",
+    "@grafana/data": "13.3.0",
+    "@grafana/runtime": "13.3.0",
+    "@grafana/ui": "13.3.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "copy-webpack-plugin": "13.0.1",
+    "ts-loader": "9.5.4",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4",
+    "webpack": "5.112.2",
+    "webpack-cli": "6.0.1"
+  },
+  "engines": { "node": ">=22" }
+}

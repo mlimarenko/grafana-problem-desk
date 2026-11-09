@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Problem Desk</title>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="#172436"/>
+  <path d="M29 34h70v47H60L44 95V81H29z" fill="none" stroke="#f6a84a" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M45 52h38M45 66h25" stroke="#f8fafc" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="91" cy="88" r="16" fill="#f6a84a"/>
+  <path d="m84 88 5 5 9-10" fill="none" stroke="#172436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

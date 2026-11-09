@@ -1,0 +1,17 @@
+node_modules/
+dist/
+artifacts/
+.token-optimizer/
+.playwright-mcp/
+.cache/
+.ci/
+.ci-components/
+.env
+.env.*
+!.env.example
+coverage/
+playwright-report/
+test-results/
+*.db
+*.db-shm
+*.db-wal

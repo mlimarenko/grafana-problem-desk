@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "id": "mlimarenko-problemdesk-app",
+  "name": "Problem Desk",
+  "backend": true,
+  "executable": "gpx_problemdesk",
+  "autoEnabled": false,
+  "info": {
+    "description": "Track Grafana alert episodes, operator comments and acknowledgement in one organization-shared workspace.",
+    "author": { "name": "Problem Desk contributors", "url": "https://github.com/mlimarenko/grafana-problem-desk" },
+    "keywords": ["alerting", "problems", "incidents", "acknowledgement"],
+    "logos": { "small": "img/logo.svg", "large": "img/logo.svg" },
+    "links": [{ "name": "Documentation", "url": "https://github.com/mlimarenko/grafana-problem-desk#readme" }],
+    "version": "0.1.0",
+    "updated": "2026-11-09",
+    "screenshots": []
+  },
+  "includes": [{ "type": "page", "name": "Problems", "path": "/a/mlimarenko-problemdesk-app", "role": "Viewer", "addToNav": true, "defaultNav": true }],
+  "dependencies": { "grafanaDependency": ">=13.3.0", "plugins": [] }
+}
