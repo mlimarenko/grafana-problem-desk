@@ -45,6 +45,9 @@ func TestSnapshotCompleteness(t *testing.T) {
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if readinessFixture(w, r) {
+					return
+				}
 				if r.URL.Path == "/api/org" {
 					_, _ = w.Write([]byte(tc.org))
 					return
@@ -81,6 +84,9 @@ func TestConcurrentRefreshesAreSerialized(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if readinessFixture(w, r) {
+			return
+		}
 		if r.URL.Path == "/api/org" {
 			if calls.Add(1) == 1 {
 				close(firstEntered)

@@ -36,14 +36,13 @@ type Syncer struct {
 // - Verified TLS
 // - Bounded timeouts
 func NewSyncer(customClient *http.Client) *Syncer {
+	client := &http.Client{Timeout: defaultHTTPTimeout}
 	if customClient != nil {
-		return &Syncer{client: customClient}
+		copy := *customClient
+		client = &copy
 	}
-	client := &http.Client{
-		Timeout: defaultHTTPTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return errors.New("redirects are forbidden for bearer token requests")
-		},
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return errors.New("redirects are forbidden for bearer token requests")
 	}
 	return &Syncer{client: client}
 }
@@ -185,7 +184,8 @@ func sanitizeError(err error, token string) string {
 // 1. Validates grafanaUrl and verifies grafanaToken is present.
 // 2. Calls GET /api/org to verify source org ID == trustedOrgID.
 // 3. Calls GET /api/alertmanager/grafana/api/v2/alerts with strict bounded JSON reading.
-// 4. Applies snapshot to the store.
+// 4. Verifies configured rules and evaluated state against the snapshot.
+// 5. Applies snapshot to the store.
 // If any failure occurs, active episodes are NEVER marked recovered, and the error is persisted.
 func (s *Syncer) Sync(ctx context.Context, store *storage.Store, trustedOrgID int64, rawURL, token string) error {
 	// Manual refresh and the poller must not apply overlapping snapshots out of order.
@@ -320,6 +320,12 @@ func (s *Syncer) Sync(ctx context.Context, store *storage.Store, trustedOrgID in
 			Annotations:  cleanAnnotations,
 			GeneratorURL: cleanURL,
 		})
+	}
+
+	if err := s.verifyReadiness(ctx, baseURL, token, rawAlerts); err != nil {
+		errMsg := sanitizeError(fmt.Errorf("source readiness: %w", err), token)
+		_ = store.SetSyncStatus(ctx, trustedOrgID, "", errMsg)
+		return errors.New(errMsg)
 	}
 
 	// 4. Atomically sync snapshot to persistent store

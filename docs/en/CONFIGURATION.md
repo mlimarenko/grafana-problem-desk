@@ -8,6 +8,15 @@ The backend persists data in SQLite, separate from the Grafana database. `PROBLE
 
 The source is the Grafana Alertmanager API's active firing alerts, not pending alerts. Polling begins on the first authenticated app visit after the plugin process starts and continues until the instance is disposed. Events missed during downtime cannot be recovered; there is no historical backfill. An episode is marked recovered only when a successful complete snapshot omits it, not on a network error.
 
+The source account also needs organization-wide read access to configured and
+evaluated Grafana alert rules. Problem Desk checks the ruler inventory and
+runtime evaluations before accepting an Alertmanager snapshot as complete.
+During Grafana startup or delayed notification delivery, existing episodes stay
+unchanged and the source reports that it is not ready. A verified empty snapshot
+after rules recover or are deleted can still recover the last active episode.
+Restricted folder visibility cannot establish complete organization-wide rule
+inventory; do not configure such a token as the source for this workspace.
+
 ## Views and windows
 
 The three views need no configuration. **Problems** always lists every active episode. **Recent** adds episodes recovered within the selected window and defaults to the last 24 hours. **History** lists episodes overlapping the selected window and defaults to the last 7 days. Members choose the window with bounded start and end values in the page; these choices are not server settings.

@@ -78,6 +78,10 @@ func TestProductLifecycle_FullFlow(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/ruler/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/prometheus/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{"status":"success","data":{"groups":[]}}`))
 		case "/api/org":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id": 1, "name": "Primary Org"}`))
@@ -257,6 +261,10 @@ func TestProduct_SourceFailureAndTruncatedStream_NoFalseRecovery(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/ruler/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/prometheus/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{"status":"success","data":{"groups":[]}}`))
 		case "/api/org":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id": 1, "name": "Org1"}`))
@@ -334,6 +342,10 @@ func TestProduct_FractionalStartsAt_DistinctEpisodes(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/ruler/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/prometheus/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{"status":"success","data":{"groups":[]}}`))
 		case "/api/org":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id": 1}`))
@@ -402,6 +414,10 @@ func TestProduct_LiteralUnsafeLookingTextRoundtrip(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/ruler/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/prometheus/grafana/api/v1/rules":
+			_, _ = w.Write([]byte(`{"status":"success","data":{"groups":[]}}`))
 		case "/api/org":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id": 1}`))

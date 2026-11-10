@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+Keep existing problem states while Grafana's alerting runtime is initializing, rather than interpreting its temporary empty Alertmanager response as recovery.
+
 ## 0.2.0
 
 - Problems, Recent and History views: all active episodes, active plus recently recovered episodes (default window 24 hours), and episodes overlapping a bounded window (default 7 days).

@@ -20,6 +20,18 @@ func getProblems(s *storage.Store, ctx context.Context, org int64, state, severi
 	return r.Problems, r.Total, err
 }
 
+func readinessFixture(w http.ResponseWriter, r *http.Request) bool {
+	switch r.URL.Path {
+	case "/api/ruler/grafana/api/v1/rules", "/custom-grafana/api/ruler/grafana/api/v1/rules":
+		_, _ = w.Write([]byte(`{}`))
+		return true
+	case "/api/prometheus/grafana/api/v1/rules", "/custom-grafana/api/prometheus/grafana/api/v1/rules":
+		_, _ = w.Write([]byte(`{"status":"success","data":{"groups":[]}}`))
+		return true
+	}
+	return false
+}
+
 func TestSyncerSuccessAndSnapshot(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.Open(":memory:")
@@ -33,6 +45,9 @@ func TestSyncerSuccessAndSnapshot(t *testing.T) {
 		auth := r.Header.Get("Authorization")
 		if auth != "Bearer secret-token-123" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if readinessFixture(w, r) {
 			return
 		}
 
@@ -278,6 +293,9 @@ func TestSyncerSuppressedPastEndsAtPreserved(t *testing.T) {
 	pastEndsAt := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if readinessFixture(w, r) {
+			return
+		}
 		if r.URL.Path == "/api/org" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id": 1}`))
@@ -462,6 +480,9 @@ func TestSyncerSubpathPreserved(t *testing.T) {
 	var orgPathCalled, alertsPathCalled bool
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if readinessFixture(w, r) {
+			return
+		}
 		switch r.URL.Path {
 		case "/custom-grafana/api/org":
 			orgPathCalled = true

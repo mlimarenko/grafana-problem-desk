@@ -12,7 +12,7 @@
     "keywords": ["alerting", "problems", "incidents", "acknowledgement"],
     "logos": { "small": "img/logo.svg", "large": "img/logo.svg" },
     "links": [{ "name": "Documentation", "url": "https://github.com/mlimarenko/grafana-problem-desk#readme" }],
-    "version": "0.2.0",
+    "version": "0.2.1",
     "updated": "2026-11-10",
     "screenshots": []
   },
