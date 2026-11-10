@@ -7,7 +7,7 @@ Problem Desk - приложение-плагин для Grafana 13.3 и нове
 Загрузите пакет Linux amd64 и проверьте контрольную сумму до распаковки:
 
 ```sh
-VERSION=0.2.2
+VERSION=0.3.0
 ASSET="mlimarenko-problemdesk-app-${VERSION}.zip"
 BASE="https://github.com/mlimarenko/grafana-problem-desk/releases/download/v${VERSION}"
 curl -fLO "${BASE}/${ASSET}"

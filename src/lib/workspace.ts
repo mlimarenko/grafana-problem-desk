@@ -1,14 +1,19 @@
 import { pageCount } from './query';
+import type { MinimumRole } from '../model';
+
+export function roleAllows(actor: string | undefined, required: MinimumRole): boolean {
+  return actor === 'Admin' || (actor === 'Editor' && required === 'editor');
+}
 
 export function correctedOffset(offset: number, limit: number, total: number): number {
   return Math.min(offset, (pageCount(total, limit) - 1) * limit);
 }
 
 export function clearSubmittedDraft(drafts: Record<string, string>, problemId: string, submittedDraft: string): Record<string, string> {
-  if (drafts[problemId] !== submittedDraft) {
+  if (!Object.hasOwn(drafts, problemId) || drafts[problemId] !== submittedDraft) {
     return drafts;
   }
-  const next = { ...drafts };
+  const next: Record<string, string> = Object.assign(Object.create(null), drafts);
   delete next[problemId];
   return next;
 }

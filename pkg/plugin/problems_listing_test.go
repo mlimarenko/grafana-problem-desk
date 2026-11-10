@@ -64,7 +64,7 @@ func TestListingViewsFiltersAndIsolation(t *testing.T) {
 	}
 	q := url.Values{"view": {"recent"}, "from": {"2026-01-02T23:59:59Z"}, "to": {"2026-01-04T00:00:00Z"}, "limit": {"1"}}
 	r := list(q.Encode())
-	if r.Total != 3 || r.Summary.Active != 2 || r.Summary.Recovered != 1 || r.Summary.Critical != 1 || r.Summary.Warning != 2 || len(r.Problems) != 1 || r.Problems[0].Fingerprint != "long" {
+	if r.Total != 3 || r.Summary.Active != 2 || r.Summary.Recovered != 1 || r.Summary.ByLevel["critical"] != 1 || r.Summary.ByLevel["warning"] != 2 || len(r.Problems) != 1 || r.Problems[0].Fingerprint != "long" {
 		t.Fatalf("recent: %+v", r)
 	}
 	if strings.Contains(strings.Join(r.Facets.Hosts, ","), "PrivateHost") {

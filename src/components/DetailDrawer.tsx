@@ -9,15 +9,20 @@ import {
   mergedActivity,
   problemTitle,
   safeURL,
-  severityTone,
+  levelDisplay,
+  levelColor,
   targetMetadata,
   targetName,
   type ActivityItem,
   type Detail,
   type ErrorKind,
   type Problem,
+  type Level,
+  type LevelTone,
 } from '../model';
 import { errorText, useI18n } from '../i18n';
+import { WorkflowSection } from './WorkflowSection';
+import type { PolicyDoc } from '../model';
 
 export type BusyAction = 'ack' | 'unack' | 'assign' | 'comment';
 
@@ -31,6 +36,10 @@ interface Props {
   draft: string;
   ownerDraft: string;
   canWrite: boolean;
+  levels: Level[];
+  severityKey: string;
+  policy?: PolicyDoc;
+  onWorkflowChanged: () => void;
   onDraftChange: (value: string) => void;
   onOwnerDraftChange: (value: string) => void;
   onClose: () => void;
@@ -51,6 +60,10 @@ export function DetailDrawer({
   draft,
   ownerDraft,
   canWrite,
+  levels,
+  severityKey,
+  policy,
+  onWorkflowChanged,
   onDraftChange,
   onOwnerDraftChange,
   onClose,
@@ -61,7 +74,7 @@ export function DetailDrawer({
   onComment,
 }: Props) {
   const styles = useStyles2(getStyles);
-  const { messages: m, formatDate, formatDuration, formatRelative } = useI18n();
+  const { messages: m, language, formatDate, formatDuration, formatRelative } = useI18n();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -127,7 +140,7 @@ export function DetailDrawer({
   const generatorURL = problem ? safeURL(problem.generatorURL) : undefined;
   const acknowledged = problem ? isAcknowledged(problem) : false;
   const duration = problem ? elapsedMs(problem, Date.now()) : undefined;
-  const severity = problem ? severityTone(problem.labels.severity) : 'unknown';
+  const severity = problem ? levelDisplay(problem, levels, severityKey, language) : { label: '', tone: 'grey' as const };
   const title = problem ? problemTitle(problem) || m.table.untitled : m.drawer.title;
 
   function activityText(item: ActivityItem): string {
@@ -235,9 +248,9 @@ export function DetailDrawer({
           {problem && (
             <>
               <div className={styles.badges}>
-                <span className={styles.severityBadge(severity)}>
+                <span className={styles.severityBadge(severity.tone)}>
                   <Icon name="exclamation-circle" size="sm" />
-                  {m.severity[severity]}
+                  {severity.label}
                 </span>
                 <span className={styles.statusBadge(problem.status)}>
                   <span className={styles.statusDot(problem.status)} />
@@ -309,6 +322,8 @@ export function DetailDrawer({
               {!canWrite && <p className={styles.hint}>{m.drawer.viewer}</p>}
 
               {problem.annotations.description && <p className={styles.prose}>{problem.annotations.description}</p>}
+
+              {policy && <WorkflowSection problem={problem} policy={policy} canWrite={canWrite} onChanged={onWorkflowChanged} />}
 
               {canWrite && (
                 <form
@@ -541,14 +556,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
     margin-bottom: ${theme.spacing(2)};
   `,
-  severityBadge: (tone: ReturnType<typeof severityTone>) => css`
+  severityBadge: (tone: LevelTone) => css`
     display: inline-flex;
     align-items: center;
     gap: ${theme.spacing(0.5)};
     padding: 2px ${theme.spacing(1)};
-    border: 1px solid ${tone === 'critical' ? theme.colors.error.border : tone === 'warning' ? theme.colors.warning.border : theme.colors.info.border};
+    border: 1px solid ${levelColor(theme, tone)};
     border-radius: 999px;
-    color: ${tone === 'critical' ? theme.colors.error.text : tone === 'warning' ? theme.colors.warning.text : theme.colors.info.text};
+    color: ${levelColor(theme, tone)};
   `,
   statusBadge: (status: Problem['status']) => css`
     display: inline-flex;

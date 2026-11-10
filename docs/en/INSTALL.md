@@ -7,7 +7,7 @@ The plugin is unsigned. For self-hosted development only, Grafana can be configu
 Download the Linux amd64 package and verify its checksum before unpacking it:
 
 ```sh
-VERSION=0.2.2
+VERSION=0.3.0
 ASSET="mlimarenko-problemdesk-app-${VERSION}.zip"
 BASE="https://github.com/mlimarenko/grafana-problem-desk/releases/download/v${VERSION}"
 curl -fLO "${BASE}/${ASSET}"

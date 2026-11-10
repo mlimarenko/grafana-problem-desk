@@ -22,10 +22,11 @@ import (
 )
 
 const (
-	maxRequestBodyBytes = 16 * 1024 // 16 KiB limit
-	defaultPollInterval = 30        // seconds
-	minPollInterval     = 10        // seconds
-	maxPollInterval     = 3600      // seconds
+	maxRequestBodyBytes       = 16 * 1024 // 16 KiB limit for regular routes
+	maxPolicyRequestBodyBytes = 64 * 1024 // 64 KiB envelope for policy routes
+	defaultPollInterval       = 30        // seconds
+	minPollInterval           = 10        // seconds
+	maxPollInterval           = 3600      // seconds
 )
 
 // Ensure App implements required SDK interfaces
@@ -37,14 +38,15 @@ var (
 
 // App is the Grafana backend app plugin instance for Problem Desk.
 type App struct {
-	store        *storage.Store
-	syncer       *problemsync.Syncer
-	settings     backend.AppInstanceSettings
-	trustedOrgID int64
-	orgOnce      sync.Once
-	pollerCancel context.CancelFunc
-	pollerWg     sync.WaitGroup
-	mu           sync.RWMutex
+	store           *storage.Store
+	syncer          *problemsync.Syncer
+	settings        backend.AppInstanceSettings
+	trustedOrgID    int64
+	orgOnce         sync.Once
+	pollerCancel    context.CancelFunc
+	pollerWg        sync.WaitGroup
+	sourceValidated map[int64]bool
+	mu              sync.RWMutex
 }
 
 // NewAppInstance satisfies app.InstanceFactoryFunc for Grafana SDK plugin instantiation.
@@ -62,9 +64,10 @@ func NewAppWithStore(settings backend.AppInstanceSettings, store *storage.Store,
 		customSyncer = problemsync.NewSyncer(nil)
 	}
 	return &App{
-		store:    store,
-		syncer:   customSyncer,
-		settings: settings,
+		store:           store,
+		syncer:          customSyncer,
+		settings:        settings,
+		sourceValidated: make(map[int64]bool),
 	}
 }
 
@@ -134,12 +137,9 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 		return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "plugin instance already bound to another organization"})
 	}
 
-	// 3. Size bound body <= 16KiB
-	if len(req.Body) > maxRequestBodyBytes {
-		return sendJSON(sender, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body exceeds maximum limit of 16KiB"})
-	}
+	actor := strings.TrimSpace(pc.User.Login)
 
-	// 4. Parse path and query
+	// 3. Parse path and query
 	cleanPath := strings.Trim(req.Path, "/")
 	var rawQuery string
 	if idx := strings.Index(cleanPath, "?"); idx != -1 {
@@ -156,8 +156,58 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 	}
 	cleanPath = strings.Trim(cleanPath, "/")
 	queryVals, queryErr := url.ParseQuery(rawQuery)
-
 	parts := strings.Split(cleanPath, "/")
+
+	// 4. Per-route body bound: policy routes carry a larger envelope.
+	bodyLimit := maxRequestBodyBytes
+	if cleanPath == "policy" || strings.HasPrefix(cleanPath, "policy/") {
+		bodyLimit = maxPolicyRequestBodyBytes
+	}
+	if len(req.Body) > bodyLimit {
+		return sendJSON(sender, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("request body exceeds maximum limit of %dKiB", bodyLimit/1024)})
+	}
+
+	// 5. Organization policy routes
+	if cleanPath == "policy" {
+		switch req.Method {
+		case http.MethodGet:
+			return a.handleGetPolicy(ctx, pc.OrgID, sender)
+		case http.MethodPut:
+			if role != "admin" {
+				return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "admin role required to edit the policy"})
+			}
+			return a.handlePutPolicy(ctx, pc.OrgID, actor, req, sender)
+		default:
+			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+	}
+	if cleanPath == "policy/preview" {
+		if req.Method != http.MethodPost {
+			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+		if role != "admin" {
+			return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "admin role required to preview the policy"})
+		}
+		return a.handlePolicyPreview(ctx, pc.OrgID, req, sender)
+	}
+	if cleanPath == "policy/revisions" {
+		if req.Method != http.MethodGet {
+			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+		if role != "admin" {
+			return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "admin role required to read policy revisions"})
+		}
+		return a.handleListPolicyRevisions(ctx, pc.OrgID, queryVals, queryErr, sender)
+	}
+	if len(parts) == 3 && parts[0] == "policy" && parts[1] == "revisions" {
+		if req.Method != http.MethodGet {
+			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+		if role != "admin" {
+			return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "admin role required to read policy revisions"})
+		}
+		return a.handleGetPolicyRevision(ctx, pc.OrgID, parts[2], sender)
+	}
 
 	// Route: GET /problems
 	if cleanPath == "problems" {
@@ -190,6 +240,32 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 		return a.handleSync(ctx, pc.OrgID, sender)
 	}
 
+	// Route: GET /problems/{id}/workflow and POST workflow actions
+	if len(parts) >= 3 && parts[0] == "problems" && parts[2] == "workflow" {
+		if len(parts) == 3 {
+			if req.Method != http.MethodGet {
+				return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			}
+			return a.handleGetWorkflowStatus(ctx, pc.OrgID, parts[1], role, sender)
+		}
+		if len(parts) == 4 {
+			if req.Method != http.MethodPost {
+				return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			}
+			if role == "viewer" {
+				return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "viewer role cannot modify problems"})
+			}
+			switch parts[3] {
+			case "start":
+				return a.handleStartWorkflow(ctx, pc.OrgID, parts[1], actor, role, req, sender)
+			case "transition":
+				return a.handleTransitionWorkflow(ctx, pc.OrgID, parts[1], actor, role, req, sender)
+			default:
+				return sendJSON(sender, http.StatusNotFound, map[string]string{"error": "endpoint not found"})
+			}
+		}
+	}
+
 	// Route: GET /problems/{id}
 	if len(parts) == 2 && parts[0] == "problems" {
 		if req.Method != http.MethodGet {
@@ -212,8 +288,6 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 		if role == "viewer" {
 			return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "viewer role cannot modify problems"})
 		}
-
-		actor := strings.TrimSpace(pc.User.Login)
 
 		switch action {
 		case "comments":
@@ -421,6 +495,7 @@ func (a *App) handleSync(ctx context.Context, orgID int64, sender backend.CallRe
 		Success: true,
 		Source:  syncStatus,
 	}
+	a.markSourceValidated(orgID)
 	return sendJSON(sender, http.StatusOK, resp)
 }
 
@@ -480,7 +555,28 @@ func (a *App) executeSync(ctx context.Context, orgID int64) error {
 	if cfg.GrafanaURL == "" || sec.GrafanaToken == "" {
 		return nil
 	}
-	return a.syncer.Sync(ctx, a.store, orgID, cfg.GrafanaURL, sec.GrafanaToken)
+	if err := a.syncer.Sync(ctx, a.store, orgID, cfg.GrafanaURL, sec.GrafanaToken); err != nil {
+		return err
+	}
+	a.markSourceValidated(orgID)
+	return nil
+}
+
+// markSourceValidated records that a successful source sync happened in this process.
+func (a *App) markSourceValidated(orgID int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sourceValidated == nil {
+		a.sourceValidated = make(map[int64]bool)
+	}
+	a.sourceValidated[orgID] = true
+}
+
+// sourceIsValidated reports whether this process has completed a successful sync.
+func (a *App) sourceIsValidated(orgID int64) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.sourceValidated[orgID]
 }
 
 func checkContentTypeJSON(req *backend.CallResourceRequest) bool {

@@ -26,10 +26,13 @@ export interface DeepLinkQuery {
 export interface WorkspaceQuery extends DeepLinkQuery {
   view: View;
   range: RangePreset;
+  rangeExplicit: boolean;
   from: string;
   to: string;
   state: StateFilter;
   severity: string;
+  workflow: string;
+  workState: string;
   host: string;
   assignee: string;
   assignment: AssignmentFilter;
@@ -71,8 +74,8 @@ function readRaw(value: string | null): string {
   return value ?? '';
 }
 
-export function defaultRangeFor(view: View): RangePreset {
-  return view === 'history' ? '7d' : '24h';
+export function defaultRangeFor(view: View, defaults?: { recent: Exclude<RangePreset, 'custom'>; history: Exclude<RangePreset, 'custom'> }): RangePreset {
+  return view === 'history' ? defaults?.history ?? '7d' : defaults?.recent ?? '24h';
 }
 
 export function isRFC3339(value: string): boolean {
@@ -96,14 +99,14 @@ export function validateCustomRange(from: string, to: string, view: View): Custo
   return 'ok';
 }
 
-export function parseQuery(search: string): WorkspaceQuery {
+export function parseQuery(search: string, defaults?: { recent: Exclude<RangePreset, 'custom'>; history: Exclude<RangePreset, 'custom'> }): WorkspaceQuery {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
   const view = oneOf(params.get('view'), views, 'problems');
-  let range = oneOf(params.get('range'), rangePresets, defaultRangeFor(view));
+  let range = oneOf(params.get('range'), rangePresets, defaultRangeFor(view, defaults));
   let from = read(params.get('from'), 64);
   let to = read(params.get('to'), 64);
   if (range === 'custom' && validateCustomRange(from, to, view) !== 'ok') {
-    range = defaultRangeFor(view);
+    range = defaultRangeFor(view, defaults);
     from = '';
     to = '';
   }
@@ -114,10 +117,13 @@ export function parseQuery(search: string): WorkspaceQuery {
   return {
     view,
     range,
+    rangeExplicit: params.has('range'),
     from,
     to,
     state: oneOf(params.get('state'), ['all', 'active', 'recovered'], 'all'),
-    severity: read(params.get('severity'), 256),
+    severity: read(params.get('severity'), 32),
+    workflow: read(params.get('workflow'), 32),
+    workState: read(params.get('workState'), 32),
     host: read(params.get('host'), 256),
     assignee: read(params.get('assignee'), 256),
     assignment: oneOf(params.get('assignment'), ['all', 'assigned', 'unassigned'], 'all'),
@@ -181,8 +187,8 @@ export function closeProblem(query: WorkspaceQuery): WorkspaceQuery {
   return { ...clearDeepLink(query), problem: '' };
 }
 
-export function withView(query: WorkspaceQuery, view: View): WorkspaceQuery {
-  const range = query.view === 'problems' ? defaultRangeFor(view) : query.range;
+export function withView(query: WorkspaceQuery, view: View, defaults?: { recent: Exclude<RangePreset, 'custom'>; history: Exclude<RangePreset, 'custom'> }): WorkspaceQuery {
+  const range = query.view === 'problems' || !query.rangeExplicit ? defaultRangeFor(view, defaults) : query.range;
   return {
     ...query,
     view,
@@ -199,6 +205,8 @@ export function resetFilters(query: WorkspaceQuery): WorkspaceQuery {
     ...query,
     state: 'all',
     severity: '',
+    workflow: '',
+    workState: '',
     host: '',
     assignee: '',
     assignment: 'all',
@@ -215,6 +223,8 @@ export function resetFilters(query: WorkspaceQuery): WorkspaceQuery {
 export function activeFilterCount(query: WorkspaceQuery): number {
   let count = 0;
   if (query.severity) count += 1;
+  if (query.workflow) count += 1;
+  if (query.workState) count += 1;
   if (query.host) count += 1;
   if (query.assignee) count += 1;
   if (query.assignment !== 'all') count += 1;
@@ -261,6 +271,8 @@ export function buildProblemsRequest(query: WorkspaceQuery, now: Date): Problems
     }
   }
   if (query.severity) request.severity = query.severity;
+  if (query.workflow) request.workflow = query.workflow;
+  if (query.workState) request.workState = query.workState;
   if (query.host) request.host = query.host;
   if (query.assignee) request.assignee = query.assignee;
   if (query.assignment !== 'all') request.assignment = query.assignment;
@@ -275,7 +287,7 @@ export function serializeQuery(query: WorkspaceQuery): URLSearchParams {
   const params = new URLSearchParams();
   if (query.view !== 'problems') params.set('view', query.view);
   if (query.view !== 'problems') {
-    params.set('range', query.range);
+    if (query.rangeExplicit) params.set('range', query.range);
     if (query.range === 'custom') {
       if (query.from) params.set('from', query.from);
       if (query.to) params.set('to', query.to);
@@ -283,6 +295,8 @@ export function serializeQuery(query: WorkspaceQuery): URLSearchParams {
     if (query.state !== 'all') params.set('state', query.state);
   }
   if (query.severity) params.set('severity', query.severity);
+  if (query.workflow) params.set('workflow', query.workflow);
+  if (query.workState) params.set('workState', query.workState);
   if (query.host) params.set('host', query.host);
   if (query.assignee) params.set('assignee', query.assignee);
   if (query.assignment !== 'all') params.set('assignment', query.assignment);
@@ -321,6 +335,8 @@ const ownedKeys = new Set([
   'to',
   'state',
   'severity',
+  'workflow',
+  'workState',
   'host',
   'assignee',
   'assignment',

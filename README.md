@@ -12,7 +12,8 @@ Problem Desk is an app plugin for working with problem episodes from Grafana Ale
 ## What it adds
 
 - Problems, Recent and History views with server-side filters and pagination
-- Host, severity, acknowledgement, owner and label filters; time windows and duration sorting
+- Host, level, acknowledgement, owner and label filters; time windows and duration sorting
+- Organization policy with configurable importance levels, operator workflows, exact label routing and view defaults
 - A discussion attached to a specific occurrence, not a point on a graph
 - Acknowledgement, owner labels and an operator activity log
 - Persistent SQLite storage, Grafana user attribution and organization isolation
@@ -21,7 +22,7 @@ Problem Desk is an app plugin for working with problem episodes from Grafana Ale
 
 Problem Desk is an **organization-wide shared workspace**. It does not reproduce Grafana Alerting's per-folder permissions: alert data visible to its service account is shared with organization members through the plugin. Administrators must not enable it where this would expose restricted data. See [security](docs/en/SECURITY.md).
 
-Problem Desk does not evaluate alert rules. Acknowledging a problem does not mute or resolve alerts; use Grafana Alerting's own controls for silences and notification routing.
+Problem Desk does not evaluate alert rules. Acknowledging a problem does not mute or resolve alerts; use Grafana Alerting's own controls for silences and notification routing. Operator workflow completion is a separate record and never hides an active source episode.
 
 ## Installation
 

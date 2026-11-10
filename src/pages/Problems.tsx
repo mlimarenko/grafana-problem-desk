@@ -22,6 +22,7 @@ import { dateTimeLocalToISO, toDateTimeLocalValue } from '../i18n/format';
 import {
   errorStatus,
   fetchDetail,
+  fetchPolicy,
   fetchProblems,
   postAck,
   postAssign,
@@ -56,11 +57,13 @@ import {
   classifyError,
   elapsedMs,
   problemTitle,
-  severityTone,
+  levelDisplay,
+  compareLevels,
   type Detail,
   type ErrorKind,
   type Listing,
   type Problem,
+  type PolicyResponse,
 } from '../model';
 import { pluginId } from '../model';
 
@@ -98,12 +101,27 @@ function Workspace() {
   const canSync = role === 'Admin';
 
   const [query, setQueryState] = useState<WorkspaceQuery>(() => parseQuery(window.location.search));
+  const [policy, setPolicy] = useState<PolicyResponse>();
+  const [policyError, setPolicyError] = useState<ErrorKind>();
+  const [policyAttempt, setPolicyAttempt] = useState(0);
   const queryRef = useRef(query);
 
   const adoptQuery = useCallback((next: WorkspaceQuery) => {
     queryRef.current = next;
     setQueryState(next);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setPolicyError(undefined);
+    fetchPolicy().then((response) => {
+      if (active) {
+        adoptQuery(parseQuery(locationService.getLocation().search, response.doc.views));
+        setPolicy(response);
+      }
+    }).catch((error) => { if (active) setPolicyError(classifyError(error)); });
+    return () => { active = false; };
+  }, [adoptQuery, policyAttempt]);
 
   const navigate = useCallback(
     (next: WorkspaceQuery, replace = false) => {
@@ -122,13 +140,13 @@ function Workspace() {
 
   useEffect(() => {
     const subscription = locationService.getLocationObservable().subscribe((location) => {
-      const next = parseQuery(location.search);
+      const next = parseQuery(location.search, policy?.doc.views);
       if (queryString(next) !== queryString(queryRef.current)) {
         adoptQuery(next);
       }
     });
     return () => subscription.unsubscribe();
-  }, [adoptQuery]);
+  }, [adoptQuery, policy]);
 
   useEffect(() => {
     const current = queryRef.current;
@@ -156,6 +174,8 @@ function Workspace() {
       to: copy.to,
       state: copy.state,
       severity: copy.severity,
+      workflow: copy.workflow,
+      workState: copy.workState,
       host: copy.host,
       assignee: copy.assignee,
       assignment: copy.assignment,
@@ -173,6 +193,7 @@ function Workspace() {
   }
 
   useEffect(() => {
+    if (!policy) return;
     let active = true;
     const requestedQuery = queryRef.current;
     const isCurrent = () => active && JSON.stringify(buildListSignature(queryRef.current)) === listKey;
@@ -218,7 +239,7 @@ function Workspace() {
     return () => {
       active = false;
     };
-  }, [listKey, refreshToken, navigate]);
+  }, [listKey, refreshToken, navigate, policy]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -285,8 +306,8 @@ function Workspace() {
   const [actionError, setActionError] = useState<ErrorKind>();
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<ErrorKind>();
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => Object.create(null));
+  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>(() => Object.create(null));
   const draft = selectedId ? drafts[selectedId] ?? '' : '';
   const ownerDraft = selectedId ? ownerDrafts[selectedId] ?? detail?.problem.assignee ?? '' : '';
 
@@ -390,9 +411,7 @@ function Workspace() {
   }, [deepLinkKey, query.problem, resolveAttempt, navigate]);
 
   function severityLabel(problem: Problem): string {
-    const raw = problem.labels.severity?.trim() ?? '';
-    const tone = severityTone(raw);
-    return tone === 'unknown' ? raw || m.severity.unknown : m.severity[tone];
+    return levelDisplay(problem, listing?.levels ?? [], listing?.severityKey ?? '', language).label;
   }
 
   function openProblem(problem: Problem) {
@@ -425,7 +444,7 @@ function Workspace() {
       if (!(problemId in previous)) {
         return previous;
       }
-      const next = { ...previous };
+      const next = Object.assign(Object.create(null), previous);
       delete next[problemId];
       return next;
     });
@@ -443,14 +462,14 @@ function Workspace() {
     if (!selectedId) {
       return;
     }
-    setDrafts((previous) => ({ ...previous, [selectedId]: value }));
+    setDrafts((previous) => Object.assign(Object.create(null), previous, { [selectedId]: value }));
   }
 
   function setOwnerDraft(value: string) {
     if (!selectedId) {
       return;
     }
-    setOwnerDrafts((previous) => ({ ...previous, [selectedId]: value }));
+    setOwnerDrafts((previous) => Object.assign(Object.create(null), previous, { [selectedId]: value }));
   }
 
   function updateDetailProblem(updated: Problem) {
@@ -510,7 +529,7 @@ function Workspace() {
         if (previous[problemId] !== undefined && previous[problemId] !== value) {
           return previous;
         }
-        const next = { ...previous };
+        const next = Object.assign(Object.create(null), previous);
         delete next[problemId];
         return next;
       });
@@ -585,6 +604,7 @@ function Workspace() {
         navigate({
           ...queryRef.current,
           range: 'custom',
+          rangeExplicit: true,
           from: currentWindow.from.toISOString(),
           to: currentWindow.to.toISOString(),
           offset: 0,
@@ -594,7 +614,7 @@ function Workspace() {
     }
     setCustomOpen(false);
     setRangeError('');
-    navigate({ ...queryRef.current, range: value, from: '', to: '', offset: 0 });
+    navigate({ ...queryRef.current, range: value, rangeExplicit: true, from: '', to: '', offset: 0 });
   }
 
   function applyCustomRange() {
@@ -618,7 +638,7 @@ function Workspace() {
       return;
     }
     setRangeError('');
-    navigate({ ...queryRef.current, range: 'custom', from, to, offset: 0 });
+    navigate({ ...queryRef.current, range: 'custom', rangeExplicit: true, from, to, offset: 0 });
   }
 
   function applySingleFilter(patch: Partial<WorkspaceQuery>) {
@@ -628,7 +648,7 @@ function Workspace() {
 
   function changeView(view: View) {
     setFilterError('');
-    navigate(withView(queryRef.current, view));
+    navigate(withView(queryRef.current, view, policy?.doc.views));
   }
 
   function exportPage() {
@@ -665,9 +685,15 @@ function Workspace() {
     acknowledged: 0,
     unacknowledged: 0,
     unassigned: 0,
-    critical: 0,
-    warning: 0,
+    byLevel: Object.create(null) as Record<string, number>,
   };
+  const levelStats = (listing?.levels ?? []).slice().sort(compareLevels).map((level) => ({
+    label: level.name[language], value: summary.byLevel[level.id] ?? 0, tone: '',
+  }));
+  const knownLevelIds = new Set((listing?.levels ?? []).map((level) => level.id));
+  for (const [id, value] of Object.entries(summary.byLevel)) {
+    if (!knownLevelIds.has(id)) levelStats.push({ label: m.summary.retired(id), value, tone: '' });
+  }
   const total = listing?.total ?? 0;
   const now = lastLoadedAt || Date.now();
   const windowRange = rangeWindow(query, new Date(lastLoadedAt || Date.now()));
@@ -683,13 +709,24 @@ function Workspace() {
   ];
   const severityOptions: Array<SelectableValue<string>> = [
     { label: m.filters.severityAll, value: '' },
-    { label: m.severity.critical, value: 'critical' },
-    { label: m.severity.warning, value: 'warning' },
-    { label: m.severity.info, value: 'info' },
+    ...(listing?.levels ?? []).slice().sort(compareLevels).map((level) => ({ label: level.name[language], value: level.id })),
   ];
   if (query.severity && !severityOptions.some((option) => option.value === query.severity)) {
-    severityOptions.push({ label: query.severity, value: query.severity });
+    severityOptions.push({ label: m.summary.retired(query.severity), value: query.severity });
   }
+  const workflowOptions: Array<SelectableValue<string>> = [
+    { label: m.filters.workflowAll, value: '' },
+    ...(policy?.doc.workflows ?? []).map((workflow) => ({ label: workflow.name[language], value: workflow.id })),
+  ];
+  if (query.workflow && !workflowOptions.some((option) => option.value === query.workflow)) workflowOptions.push({ label: m.summary.retired(query.workflow), value: query.workflow });
+  const states = new Map<string, string>();
+  for (const workflow of policy?.doc.workflows ?? []) {
+    if (!query.workflow || query.workflow === workflow.id) {
+      for (const state of workflow.states) if (!states.has(state.id)) states.set(state.id, state.name[language]);
+    }
+  }
+  const workStateOptions: Array<SelectableValue<string>> = [{ label: m.filters.workStateAll, value: '' }, ...Array.from(states, ([value, label]) => ({ value, label }))];
+  if (query.workState && !states.has(query.workState)) workStateOptions.push({ label: m.summary.retired(query.workState), value: query.workState });
   const assignmentOptions: Array<SelectableValue<WorkspaceQuery['assignment']>> = [
     { label: m.filters.assignmentAll, value: 'all' },
     { label: m.filters.assigned, value: 'assigned' },
@@ -773,7 +810,7 @@ function Workspace() {
               {syncing ? m.app.syncing : m.app.syncSource}
             </Button>
           )}
-          <a className={styles.configLink} href={`${config.appSubUrl}/plugins/${pluginId}/configuration`}>
+          <a className={styles.configLink} href={`${config.appSubUrl}/plugins/${pluginId}?page=configuration`}>
             <Icon name="cog" size="sm" />
             {m.app.configuration}
           </a>
@@ -810,13 +847,12 @@ function Workspace() {
           { label: m.summary.matchingLabel, value: listing ? total : '—', tone: '' },
           { label: m.summary.active, value: listing ? summary.active : '—', tone: 'critical' },
           { label: m.summary.recovered, value: listing ? summary.recovered : '—', tone: 'success' },
-          { label: m.summary.critical, value: listing ? summary.critical : '—', tone: 'critical' },
-          { label: m.summary.warning, value: listing ? summary.warning : '—', tone: 'warning' },
+          ...levelStats,
           { label: m.summary.acknowledged, value: listing ? summary.acknowledged : '—', tone: 'success' },
           { label: m.summary.unacknowledged, value: listing ? summary.unacknowledged : '—', tone: '' },
           { label: m.summary.unassigned, value: listing ? summary.unassigned : '—', tone: '' },
-        ].map((stat) => (
-          <div className={styles.stat} key={stat.label}>
+        ].map((stat, index) => (
+          <div className={styles.stat} key={`${index}:${stat.label}`}>
             <span className={styles.statLabel}>{stat.label}</span>
             <strong className={stat.tone ? styles.statValue(stat.tone) : styles.statValuePlain}>{stat.value}</strong>
           </div>
@@ -832,6 +868,11 @@ function Workspace() {
       {syncError && (
         <Alert title={m.errors.syncTitle} severity="error">
           {errorText(syncError, m)}
+        </Alert>
+      )}
+      {policyError && (
+        <Alert title={m.errors.listTitle} severity="error">
+          {errorText(policyError, m)} <Button size="sm" variant="secondary" onClick={() => setPolicyAttempt((value) => value + 1)}>{m.common.retry}</Button>
         </Alert>
       )}
       {listError && (
@@ -917,10 +958,14 @@ function Workspace() {
                 aria-label={m.filters.severity}
                 options={severityOptions}
                 value={query.severity}
-                allowCustomValue
-                onCreateOption={(value) => applySingleFilter({ severity: value })}
                 onChange={(option) => applySingleFilter({ severity: option.value ?? '' })}
               />
+            </Field>
+            <Field label={m.filters.workflow} className={styles.field}>
+              <Select aria-label={m.filters.workflow} options={workflowOptions} value={query.workflow} onChange={(option) => applySingleFilter({ workflow: option.value ?? '' })} />
+            </Field>
+            <Field label={m.filters.workState} className={styles.field}>
+              <Select aria-label={m.filters.workState} options={workStateOptions} value={query.workState} onChange={(option) => applySingleFilter({ workState: option.value ?? '' })} />
             </Field>
             <Field label={m.filters.host} className={styles.field}>
               <Input
@@ -1079,7 +1124,7 @@ function Workspace() {
           </div>
         )}
         {listing && listing.problems.length > 0 && (
-          <ProblemTable problems={listing.problems} selectedId={selectedId} now={now} onOpen={openProblem} />
+          <ProblemTable problems={listing.problems} levels={listing.levels} severityKey={listing.severityKey} columns={policy?.doc.views.columns ?? []} selectedId={selectedId} now={now} onOpen={openProblem} />
         )}
         {listing && (
           <div className={styles.pagination}>
@@ -1132,6 +1177,10 @@ function Workspace() {
         draft={draft}
         ownerDraft={ownerDraft}
         canWrite={canWrite}
+        levels={listing?.levels ?? policy?.doc.levels ?? []}
+        severityKey={listing?.severityKey ?? policy?.doc.severityKey ?? ''}
+        policy={policy?.doc}
+        onWorkflowChanged={() => setRefreshToken((value) => value + 1)}
         onDraftChange={setDraft}
         onOwnerDraftChange={setOwnerDraft}
         onClose={closeDrawer}

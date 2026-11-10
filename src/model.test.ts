@@ -6,14 +6,17 @@ import {
   mergedActivity,
   problemTitle,
   safeURL,
-  severityTone,
+  levelDisplay,
+  compareLevels,
   targetMetadata,
   targetName,
   type Problem,
+  type Level,
 } from './model';
 
 const example: Problem = {
   id: 'episode-1',
+  levelId: 'warning',
   fingerprint: 'alert-1',
   startsAt: '2026-11-09T00:00:00Z',
   endsAt: '',
@@ -48,13 +51,17 @@ describe('problem presentation', () => {
     expect(problemTitle({ ...example, annotations: { summary: 'Database pool exhausted' } })).toBe('Database pool exhausted');
   });
 
-  it('maps common alert severities to stable display tones', () => {
-    expect(severityTone('critical')).toBe('critical');
-    expect(severityTone('disaster')).toBe('critical');
-    expect(severityTone('HIGH')).toBe('critical');
-    expect(severityTone('average')).toBe('warning');
-    expect(severityTone('information')).toBe('info');
-    expect(severityTone('unexpected')).toBe('unknown');
+  it('uses level aliases literally and preserves unmatched raw text', () => {
+    const levels: Level[] = [{ id: 'warning', rank: 3, tone: 'yellow', name: { en: 'Warning', ru: 'Внимание' }, aliases: ['average', ' spaced '] }];
+    const display = (raw: string, id = 'warning') => levelDisplay({ ...example, levelId: id, labels: { priority: raw } }, levels, 'priority', 'en');
+    expect(display('AVERAGE')).toEqual({ label: 'Warning', tone: 'yellow' });
+    expect(display(' SPACED ')).toEqual({ label: 'Warning', tone: 'yellow' });
+    expect(display('average ')).toEqual({ label: 'average ', tone: 'yellow' });
+    expect(display('', 'removed')).toEqual({ label: 'retired: removed', tone: 'grey' });
+    expect(display('custom', 'removed')).toEqual({ label: 'custom', tone: 'grey' });
+    const a = { ...levels[0], id: 'a' };
+    const z = { ...levels[0], id: 'z' };
+    expect([z, a].sort(compareLevels).map((level) => level.id)).toEqual(['a', 'z']);
   });
 
   it('calculates the age or recovery duration without negative values', () => {

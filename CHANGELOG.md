@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+- Organization policy: validated, revisioned levels, workflows, label routing and view defaults per Grafana organization, with optimistic revision checks and an immutable audit history.
+- Configurable importance levels with stable ids, Russian and English names, bounded theme colors and ranks, source-label aliases and a configurable source severity key. Defaults reproduce the 0.2 ordering exactly, including `disaster`, `critical`, `high`, the equal-rank `warning`/`average`, `info`/`information` and the unknown fallback.
+- Optional operator workflows with stable states, explicit start and transitions, gates for acknowledgement, owner, comment and a recovered source state confirmed by a trusted snapshot. Workflow identity is pinned per episode; routing edits do not move existing cases. Completion is separate from graph termination and an audited reopen edge can be configured. Every workflow start and transition has a configurable minimum native role: Editor by default, optionally Admin. The policy never grants Viewer mutations or changes Grafana authorization.
+- Start and transition requests carry the expected policy revision, and transitions also carry the expected current operator state. The server compares both inside the writer transaction and returns a conflict with zero state, event or comment writes if either changed, even when the new graph would allow the same target.
+- Exact label rules select an organizational processing profile; no scripts, regular expressions, webhooks or metric thresholds. Administrators preview the effective profile and unmet requirements. When a rule or non-null default selects a workflow, the server enforces that choice and does not let an operator substitute a weaker workflow; explicit choice is offered only when nothing selects one.
+- Native form-based policy editor with validation errors by JSON path, optimistic revision conflict handling, revision history and bounded JSON import/export.
+- Listing API and UI now read level metadata from the server: `levelId`, `levels`, `severityKey`, `policyRevision`, `summary.byLevel`, the `severity=<configured level id>` filter and `severity` rank sort, plus distinct `workState` and `workflow` operator filters. The duplicated hardcoded severity classification was removed.
+- Additive schema migration preserves 0.2 episodes, comments, acknowledgements, owners and events; legacy episodes stay untracked until an operator explicitly starts a workflow.
+
 ## 0.2.2
 
 Interpret Grafana runtime states with informational reasons, including `Normal (NoData)`, without blocking synchronization of valid snapshots.

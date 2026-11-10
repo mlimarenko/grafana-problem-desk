@@ -86,7 +86,7 @@ func TestOperatorMutationRollback(t *testing.T) {
 	}
 }
 
-func TestSeverityFilterIsLiteral(t *testing.T) {
+func TestLevelFilterIsLiteral(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(":memory:")
 	if err != nil {
@@ -102,6 +102,6 @@ func TestSeverityFilterIsLiteral(t *testing.T) {
 		t.Fatal(err)
 	}
 	if total != 0 {
-		t.Fatal("severity filter treated a literal value as a wildcard pattern")
+		t.Fatal("level filter treated a literal value as a wildcard pattern")
 	}
 }

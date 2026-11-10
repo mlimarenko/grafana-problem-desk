@@ -45,11 +45,12 @@ func parseProblemQuery(values url.Values, now time.Time) (storage.ProblemQuery, 
 	if !enum("view", &q.View, "problems", "recent", "history") || !enum("state", &q.State, "all", "active", "recovered") || !enum("assignment", &q.Assignment, "all", "assigned", "unassigned") || !enum("ack", &q.Ack, "all", "acknowledged", "unacknowledged") || !enum("sort", &q.Sort, "severity", "started", "duration", "recovered") || !enum("order", &q.Order, "asc", "desc") {
 		return q, invalid
 	}
-	q.Severity, q.Host, q.Assignee, q.Search = values.Get("severity"), values.Get("host"), values.Get("assignee"), values.Get("search")
+	q.Severity, q.WorkState, q.Workflow = values.Get("severity"), values.Get("workState"), values.Get("workflow")
+	q.Host, q.Assignee, q.Search = values.Get("host"), values.Get("assignee"), values.Get("search")
 	q.LabelKey, q.LabelValue = values.Get("labelKey"), values.Get("labelValue")
 	_, hasKey := values["labelKey"]
 	_, hasValue := values["labelValue"]
-	if hasKey != hasValue || (hasKey && q.LabelKey == "") || len(q.Severity) > 256 || len(q.Host) > 256 || len(q.Assignee) > 256 || len(q.LabelKey) > 256 || len(q.LabelValue) > 1024 {
+	if hasKey != hasValue || (hasKey && q.LabelKey == "") || len(q.Severity) > 256 || len(q.WorkState) > 256 || len(q.Workflow) > 256 || len(q.Host) > 256 || len(q.Assignee) > 256 || len(q.LabelKey) > 256 || len(q.LabelValue) > 1024 {
 		return q, invalid
 	}
 	if v, ok := values["limit"]; ok {

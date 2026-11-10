@@ -5,6 +5,7 @@ import { getBackendSrv } from '@grafana/runtime';
 import { Alert, Button, Field, Input, SecretInput, Select, useStyles2 } from '@grafana/ui';
 import { classifyError, pluginId, type Options } from '../model';
 import { errorText, I18nProvider, useI18n, type Language } from '../i18n';
+import { PolicyEditor } from '../components/PolicyEditor';
 
 export function Config(props: PluginConfigPageProps<AppPluginMeta<Options>>) {
   return (
@@ -146,6 +147,7 @@ function ConfigPage({ plugin }: PluginConfigPageProps<AppPluginMeta<Options>>) {
           {busy ? m.config.saving : m.config.save}
         </Button>
       </form>
+      <PolicyEditor />
     </main>
   );
 }

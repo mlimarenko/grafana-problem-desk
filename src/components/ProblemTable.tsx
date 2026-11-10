@@ -6,10 +6,14 @@ import {
   elapsedMs,
   isAcknowledged,
   problemTitle,
-  severityTone,
+  levelDisplay,
+  levelColor,
   targetMetadata,
   targetName,
   type Problem,
+  type Level,
+  type LevelTone,
+  type PolicyColumn,
 } from '../model';
 import { useI18n } from '../i18n';
 
@@ -17,21 +21,15 @@ interface Props {
   problems: Problem[];
   selectedId: string;
   now: number;
+  levels: Level[];
+  severityKey: string;
+  columns: PolicyColumn[];
   onOpen: (problem: Problem) => void;
 }
 
-export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
+export function ProblemTable({ problems, selectedId, now, levels, severityKey, columns, onOpen }: Props) {
   const styles = useStyles2(getStyles);
-  const { messages: m, formatDate, formatDuration, formatRelative } = useI18n();
-
-  function severityLabel(problem: Problem): { label: string; tone: ReturnType<typeof severityTone> } {
-    const raw = problem.labels.severity?.trim() ?? '';
-    const tone = severityTone(raw);
-    if (tone === 'unknown') {
-      return { label: raw || m.severity.unknown, tone };
-    }
-    return { label: m.severity[tone], tone };
-  }
+  const { messages: m, language, formatDate, formatDuration, formatRelative } = useI18n();
 
   return (
     <div className={styles.wrap}>
@@ -39,13 +37,13 @@ export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
         <caption className={styles.srOnly}>{m.table.caption}</caption>
         <thead>
           <tr>
-            <th scope="col">{m.table.severity}</th>
-            <th scope="col">{m.table.problem}</th>
-            <th scope="col">{m.table.status}</th>
-            <th scope="col">{m.table.started}</th>
-            <th scope="col">{m.table.duration}</th>
-            <th scope="col">{m.table.owner}</th>
-            <th scope="col">{m.table.ack}</th>
+            {columns.includes('level') && <th scope="col">{m.table.severity}</th>}
+            {columns.includes('name') && <th scope="col">{m.table.problem}</th>}
+            {columns.includes('status') && <th scope="col">{m.table.status}</th>}
+            {columns.includes('started') && <th scope="col">{m.table.started}</th>}
+            {columns.includes('duration') && <th scope="col">{m.table.duration}</th>}
+            {columns.includes('owner') && <th scope="col">{m.table.owner}</th>}
+            {columns.includes('ack') && <th scope="col">{m.table.ack}</th>}
           </tr>
         </thead>
         <tbody>
@@ -53,7 +51,7 @@ export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
             const title = problemTitle(problem) || m.table.untitled;
             const target = targetName(problem);
             const metadata = targetMetadata(problem);
-            const severity = severityLabel(problem);
+            const severity = levelDisplay(problem, levels, severityKey, language);
             const acknowledged = isAcknowledged(problem);
             const duration = elapsedMs(problem, now);
             const selected = problem.id === selectedId;
@@ -62,17 +60,25 @@ export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
                 key={problem.id}
                 className={selected ? styles.selectedRow : styles.row}
                 onClick={() => onOpen(problem)}
+                tabIndex={columns.includes('name') ? undefined : 0}
+                aria-label={columns.includes('name') ? undefined : m.table.open(title)}
+                onKeyDown={(event) => {
+                  if (!columns.includes('name') && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault();
+                    onOpen(problem);
+                  }
+                }}
                 data-testid="problem-row"
               >
-                <td>
+                {columns.includes('level') && <td>
                   <span className={styles.severityBadge(severity.tone)}>
                     <Icon
                       name={
-                        severity.tone === 'critical'
+                         severity.tone === 'red'
                           ? 'exclamation-triangle'
-                          : severity.tone === 'warning'
+                           : severity.tone === 'orange' || severity.tone === 'yellow'
                             ? 'exclamation-circle'
-                            : severity.tone === 'info'
+                             : severity.tone === 'blue'
                               ? 'info-circle'
                               : 'circle'
                       }
@@ -80,8 +86,8 @@ export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
                     />
                     {severity.label}
                   </span>
-                </td>
-                <td className={styles.problemCell}>
+                </td>}
+                {columns.includes('name') && <td className={styles.problemCell}>
                   <button
                     type="button"
                     className={styles.titleButton}
@@ -103,8 +109,8 @@ export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
                     <span>{target || m.table.noTarget}</span>
                     {metadata.length > 0 && <span className={styles.metadata}>· {metadata.join(' · ')}</span>}
                   </div>
-                </td>
-                <td>
+                </td>}
+                {columns.includes('status') && <td>
                   <span className={styles.statusBadge(problem.status)}>
                     <span className={styles.statusDot(problem.status)} />
                     {problem.status === 'active' ? m.status.active : m.status.recovered}
@@ -112,20 +118,20 @@ export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
                   {problem.status === 'recovered' && problem.endsAt && (
                     <div className={styles.secondary}>{m.table.recoveredAt(formatRelative(problem.endsAt, now))}</div>
                   )}
-                </td>
-                <td>
+                </td>}
+                {columns.includes('started') && <td>
                   <time dateTime={problem.startsAt} className={styles.started}>
                     {formatDate(problem.startsAt)}
                   </time>
                   <div className={styles.secondary}>{formatRelative(problem.startsAt, now)}</div>
-                </td>
-                <td className={styles.duration}>{duration === undefined ? '—' : formatDuration(duration)}</td>
-                <td>
+                </td>}
+                {columns.includes('duration') && <td className={styles.duration}>{duration === undefined ? '—' : formatDuration(duration)}</td>}
+                {columns.includes('owner') && <td>
                   <span className={problem.assignee ? styles.owner : styles.unassigned}>
                     {problem.assignee || m.filters.unassigned}
                   </span>
-                </td>
-                <td>
+                </td>}
+                {columns.includes('ack') && <td>
                   {acknowledged ? (
                     <span className={styles.ackBadge} title={m.ack.acknowledgedBy(problem.acknowledgedBy)}>
                       <Icon name="check" size="sm" />
@@ -135,7 +141,7 @@ export function ProblemTable({ problems, selectedId, now, onOpen }: Props) {
                   ) : (
                     <span className={styles.muted}>{m.ack.notAcknowledged}</span>
                   )}
-                </td>
+                </td>}
               </tr>
             );
           })}
@@ -270,27 +276,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   `,
-  severityBadge: (tone: ReturnType<typeof severityTone>) => css`
+  severityBadge: (tone: LevelTone) => css`
     display: inline-flex;
     align-items: center;
     gap: ${theme.spacing(0.5)};
     padding: 2px ${theme.spacing(1)};
-    border: 1px solid
-      ${tone === 'critical'
-        ? theme.colors.error.border
-        : tone === 'warning'
-          ? theme.colors.warning.border
-          : tone === 'info'
-            ? theme.colors.info.border
-            : theme.colors.border.weak};
+    border: 1px solid ${levelColor(theme, tone)};
     border-radius: 999px;
-    color: ${tone === 'critical'
-      ? theme.colors.error.text
-      : tone === 'warning'
-        ? theme.colors.warning.text
-        : tone === 'info'
-          ? theme.colors.info.text
-          : theme.colors.text.secondary};
+    color: ${levelColor(theme, tone)};
     white-space: nowrap;
     font-weight: ${theme.typography.fontWeightMedium};
   `,

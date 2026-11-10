@@ -9,12 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 )
+
+// supportedSchemaVersion is the newest additive schema this build understands.
+const supportedSchemaVersion = 1
 
 var (
 	// ErrNotFound is returned when an episode is not found for the requested org_id.
@@ -24,6 +28,9 @@ var (
 // Store provides persistence for Problem Desk in pure-Go SQLite.
 type Store struct {
 	db *sql.DB
+
+	policyMu    sync.Mutex
+	policyCache map[string]*policySnapshot
 }
 
 // ResolveDataPath returns PROBLEMDESK_DATA_PATH or the Grafana default.
@@ -64,7 +71,7 @@ func Open(customPath string) (*Store, error) {
 	// Single writer connection pool for SQLite file safety
 	db.SetMaxOpenConns(1)
 
-	s := &Store{db: db}
+	s := &Store{db: db, policyCache: make(map[string]*policySnapshot)}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
@@ -89,8 +96,7 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
 
-func (s *Store) migrate() error {
-	schema := `
+const baseSchema = `
 	CREATE TABLE IF NOT EXISTS problems (
 		id TEXT PRIMARY KEY,
 		org_id INTEGER NOT NULL,
@@ -140,21 +146,155 @@ func (s *Store) migrate() error {
 		last_error TEXT NOT NULL DEFAULT '',
 		updated_at TEXT NOT NULL
 	);
-	`
-	_, err := s.db.Exec(schema)
-	return err
+`
+
+const policySchema = `
+	CREATE TABLE IF NOT EXISTS policy_revisions (
+		org_id INTEGER NOT NULL,
+		revision INTEGER NOT NULL,
+		doc_json TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		created_by TEXT NOT NULL,
+		PRIMARY KEY (org_id, revision)
+	);
+	CREATE TABLE IF NOT EXISTS policy_audit (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		org_id INTEGER NOT NULL,
+		revision INTEGER NOT NULL,
+		actor TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		action TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_policy_audit_org_revision ON policy_audit(org_id, revision);
+	CREATE TRIGGER IF NOT EXISTS policy_revisions_no_update
+		BEFORE UPDATE ON policy_revisions
+		BEGIN SELECT RAISE(ABORT, 'policy revisions are immutable'); END;
+	CREATE TRIGGER IF NOT EXISTS policy_revisions_no_delete
+		BEFORE DELETE ON policy_revisions
+		BEGIN SELECT RAISE(ABORT, 'policy revisions are immutable'); END;
+	CREATE TRIGGER IF NOT EXISTS policy_audit_no_update
+		BEFORE UPDATE ON policy_audit
+		BEGIN SELECT RAISE(ABORT, 'policy audit is append-only'); END;
+	CREATE TRIGGER IF NOT EXISTS policy_audit_no_delete
+		BEFORE DELETE ON policy_audit
+		BEGIN SELECT RAISE(ABORT, 'policy audit is append-only'); END;
+`
+
+// backfillLevelSQL maps the raw default severity label to the default level id.
+// It is the only migration write to existing episode rows: raw labels, comments,
+// acknowledgements, owners and events stay untouched, and no workflow is invented.
+const backfillLevelSQL = `
+	UPDATE problems SET level_id = CASE lower(COALESCE(json_extract(labels, '$.severity'), ''))
+		WHEN 'disaster' THEN 'disaster'
+		WHEN 'critical' THEN 'critical'
+		WHEN 'high' THEN 'high'
+		WHEN 'warning' THEN 'warning'
+		WHEN 'average' THEN 'warning'
+		WHEN 'info' THEN 'info'
+		WHEN 'information' THEN 'info'
+		ELSE 'unknown' END
+	WHERE level_id = ''
+`
+
+func (s *Store) migrate() error {
+	ctx := context.Background()
+	var version int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("failed to read schema version: %w", err)
+	}
+	if version > supportedSchemaVersion {
+		// Fail closed: an older build must not write to a newer schema.
+		return fmt.Errorf("unsupported database schema version %d: this build supports up to %d", version, supportedSchemaVersion)
+	}
+	if version == supportedSchemaVersion {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin schema migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, baseSchema); err != nil {
+		return fmt.Errorf("failed to create base schema: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, policySchema); err != nil {
+		return fmt.Errorf("failed to create policy schema: %w", err)
+	}
+	columns := []struct{ table, name, definition string }{
+		{"problems", "level_id", "level_id TEXT NOT NULL DEFAULT ''"},
+		{"problems", "workflow_id", "workflow_id TEXT NULL"},
+		{"problems", "state_id", "state_id TEXT NULL"},
+		{"events", "policy_revision", "policy_revision INTEGER NULL"},
+	}
+	for _, column := range columns {
+		if err := ensureColumn(ctx, tx, column.table, column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, backfillLevelSQL); err != nil {
+		return fmt.Errorf("failed to backfill level ids: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_problems_org_level ON problems(org_id, level_id)"); err != nil {
+		return fmt.Errorf("failed to index level ids: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", supportedSchemaVersion)); err != nil {
+		return fmt.Errorf("failed to record schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit schema migration: %w", err)
+	}
+	return nil
+}
+
+// ensureColumn adds a column only when it is absent, making 0->1 migration idempotent.
+func ensureColumn(ctx context.Context, tx *sql.Tx, table, column, definition string) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return fmt.Errorf("failed to inspect table %s: %w", table, err)
+	}
+	exists := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to inspect table %s: %w", table, err)
+		}
+		if name == column {
+			exists = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to inspect table %s: %w", table, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to inspect table %s: %w", table, err)
+	}
+	if exists {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+definition); err != nil {
+		return fmt.Errorf("failed to add column %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 // GetProblemByID loads a single problem by ID, strictly enforcing org_id scoping.
 func (s *Store) GetProblemByID(ctx context.Context, orgID int64, id string) (*models.Problem, error) {
 	query := `
 		SELECT id, fingerprint, starts_at, ends_at, status, labels, annotations,
-		       generator_url, acknowledged_by, acknowledged_at, assignee, last_seen_at
+		       generator_url, acknowledged_by, acknowledged_at, assignee, last_seen_at,
+		       level_id, workflow_id, state_id
 		FROM problems
 		WHERE org_id = ? AND id = ?
 	`
 	var p models.Problem
 	var labelsJSON, annotationsJSON string
+	var workflowID, stateID sql.NullString
 	err := s.db.QueryRowContext(ctx, query, orgID, id).Scan(
 		&p.ID,
 		&p.Fingerprint,
@@ -168,12 +308,23 @@ func (s *Store) GetProblemByID(ctx context.Context, orgID int64, id string) (*mo
 		&p.AcknowledgedAt,
 		&p.Assignee,
 		&p.LastSeenAt,
+		&p.LevelID,
+		&workflowID,
+		&stateID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get problem: %w", err)
+	}
+	if workflowID.Valid {
+		value := workflowID.String
+		p.WorkflowID = &value
+	}
+	if stateID.Valid {
+		value := stateID.String
+		p.StateID = &value
 	}
 
 	_ = json.Unmarshal([]byte(labelsJSON), &p.Labels)
@@ -216,7 +367,7 @@ func (s *Store) GetComments(ctx context.Context, orgID int64, problemID string) 
 // GetEvents returns all audit events for a problem, strictly scoped to org_id.
 func (s *Store) GetEvents(ctx context.Context, orgID int64, problemID string) ([]models.Event, error) {
 	query := `
-		SELECT id, kind, author, created_at, body
+		SELECT id, kind, author, created_at, body, policy_revision
 		FROM events
 		WHERE org_id = ? AND problem_id = ?
 		ORDER BY created_at ASC, id ASC
@@ -230,8 +381,13 @@ func (s *Store) GetEvents(ctx context.Context, orgID int64, problemID string) ([
 	events := make([]models.Event, 0)
 	for rows.Next() {
 		var e models.Event
-		if err := rows.Scan(&e.ID, &e.Kind, &e.Author, &e.CreatedAt, &e.Body); err != nil {
+		var revision sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.Kind, &e.Author, &e.CreatedAt, &e.Body, &revision); err != nil {
 			return nil, fmt.Errorf("failed to scan event: %w", err)
+		}
+		if revision.Valid {
+			value := revision.Int64
+			e.PolicyRevision = &value
 		}
 		events = append(events, e)
 	}
@@ -448,6 +604,14 @@ type SnapshotAlert struct {
 // - Active episodes previously in DB that are absent from the snapshot become recovered.
 // - Last success is recorded and last error is cleared.
 func (s *Store) SyncSnapshot(ctx context.Context, orgID int64, observedTime time.Time, activeAlerts []SnapshotAlert) error {
+	// Resolve the active organization policy before opening the write transaction:
+	// bootstrapping is a separate system write and never runs inside the snapshot tx.
+	snapshot, err := s.ActivePolicy(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("failed to load organization policy: %w", err)
+	}
+	severityKey := snapshot.Doc.SeverityKey
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin snapshot transaction: %w", err)
@@ -467,6 +631,7 @@ func (s *Store) SyncSnapshot(ctx context.Context, orgID int64, observedTime time
 
 		labelsJSON, _ := json.Marshal(a.Labels)
 		annotationsJSON, _ := json.Marshal(a.Annotations)
+		levelID := snapshot.Compiled.ResolveLevel(a.Labels[severityKey]).Level.ID
 
 		// Check if exists
 		var existingID, existingStatus string
@@ -483,28 +648,29 @@ func (s *Store) SyncSnapshot(ctx context.Context, orgID int64, observedTime time
 				INSERT INTO problems (
 					id, org_id, fingerprint, starts_at, ends_at, status,
 					labels, annotations, generator_url, acknowledged_by, acknowledged_at,
-					assignee, last_seen_at, created_at, updated_at
-				) VALUES (?, ?, ?, ?, '', 'active', ?, ?, ?, '', '', '', ?, ?, ?)
+					assignee, last_seen_at, created_at, updated_at, level_id
+				) VALUES (?, ?, ?, ?, '', 'active', ?, ?, ?, '', '', '', ?, ?, ?, ?)
 			`
 			if _, err := tx.ExecContext(ctx, insertSQL,
 				newID, orgID, a.Fingerprint, a.StartsAt,
 				string(labelsJSON), string(annotationsJSON), a.GeneratorURL,
-				obsStr, obsStr, obsStr,
+				obsStr, obsStr, obsStr, levelID,
 			); err != nil {
 				return fmt.Errorf("failed to insert problem episode: %w", err)
 			}
 		} else if err != nil {
 			return fmt.Errorf("failed to query existing episode: %w", err)
 		} else {
-			// Existing episode: update last_seen_at, labels, annotations, generator_url
-			// Idempotent replay: DO NOT overwrite comments or acknowledgedBy!
+			// Existing episode: update last_seen_at, labels, annotations, generator_url and
+			// re-resolve the derived level. Idempotent replay: DO NOT overwrite comments,
+			// acknowledgedBy, workflow or state!
 			updateSQL := `
 				UPDATE problems
-				SET last_seen_at = ?, labels = ?, annotations = ?, generator_url = ?, status = 'active', ends_at = '', updated_at = ?
+				SET last_seen_at = ?, labels = ?, annotations = ?, generator_url = ?, status = 'active', ends_at = '', updated_at = ?, level_id = ?
 				WHERE org_id = ? AND id = ?
 			`
 			if _, err := tx.ExecContext(ctx, updateSQL,
-				obsStr, string(labelsJSON), string(annotationsJSON), a.GeneratorURL, obsStr,
+				obsStr, string(labelsJSON), string(annotationsJSON), a.GeneratorURL, obsStr, levelID,
 				orgID, existingID,
 			); err != nil {
 				return fmt.Errorf("failed to update problem replay: %w", err)

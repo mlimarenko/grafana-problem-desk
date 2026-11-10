@@ -1,3 +1,6 @@
+import type { GrafanaTheme2 } from '@grafana/data';
+import { dictionaries } from './i18n/messages';
+
 export const pluginId = 'mlimarenko-problemdesk-app';
 
 export interface Options {
@@ -7,6 +10,7 @@ export interface Options {
 
 export interface Problem {
   id: string;
+  levelId: string;
   fingerprint: string;
   startsAt: string;
   endsAt: string;
@@ -47,8 +51,34 @@ export interface Summary {
   acknowledged: number;
   unacknowledged: number;
   unassigned: number;
-  critical: number;
-  warning: number;
+  byLevel: Record<string, number>;
+}
+
+export type LevelTone = 'red' | 'orange' | 'yellow' | 'blue' | 'green' | 'purple' | 'grey';
+export interface LocalizedName { ru: string; en: string }
+export interface Level { id: string; rank: number; tone: LevelTone; name: LocalizedName; aliases: string[] }
+export interface Requires { ack?: boolean; owner?: boolean; comment?: boolean; sourceRecovered?: boolean }
+export type MinimumRole = 'editor' | 'admin';
+export interface PolicyState { id: string; rank: number; name: LocalizedName; operatorComplete?: boolean }
+export interface PolicyTransition { from: string; to: string; minimumRole: MinimumRole; requires: Requires }
+export interface PolicyWorkflow { id: string; name: LocalizedName; initialState: string; minimumRole: MinimumRole; startRequires: Requires; states: PolicyState[]; transitions: PolicyTransition[] }
+export interface PolicyRoute { match: { labels: Record<string, string>; level?: string }; workflow: string }
+export type PolicyRange = '1h' | '24h' | '7d' | '30d';
+export type PolicyColumn = 'level' | 'name' | 'status' | 'started' | 'duration' | 'owner' | 'ack';
+export interface PolicyViews { recent: PolicyRange; history: PolicyRange; columns: PolicyColumn[] }
+export interface PolicyDoc { schemaVersion: 1; severityKey: string; levels: Level[]; workflows: PolicyWorkflow[]; routing: PolicyRoute[]; defaultWorkflow: string | null; views: PolicyViews; source: { recoveredTrustMinutes: number } }
+export interface PolicyResponse { revision: number; doc: PolicyDoc; defaultsApplied: boolean; occupancy: Array<{ workflowId: string; stateId: string; count: number }> }
+export interface PolicyIssue { path: string; code: string; message: string }
+export interface PolicyOccupancy { workflowId: string; stateId: string; count: number }
+export interface PolicyPreviewSample { labels: Record<string, string>; acknowledged?: boolean; assignee?: string; status?: 'active' | 'recovered'; comment?: string }
+export interface PolicyPreview { valid: boolean; issues: PolicyIssue[]; occupancyViolations: PolicyOccupancy[]; samples: Array<{ levelId: string; levelMatched: boolean; workflowId: string | null; canStart: boolean; missingStartRequires: string[] }> }
+export interface PolicyRevision { revision: number; createdAt: string; createdBy: string; action: string }
+export interface WorkflowEdge { to: string; allowed: boolean; requiredRole: MinimumRole; missing: string[] }
+export type WorkflowStatus = { tracked: false; policyRevision: number; availableWorkflows: Array<{ id: string; name: LocalizedName; minimumRole: MinimumRole }>; suggestedWorkflow?: string } | { tracked: true; workflowId: string; stateId: string; revisionUsed: number; retired: boolean; sourceConflict: boolean; source: { status: string; lastSuccess: string; error: string; trusted: boolean; stale: boolean }; edges: WorkflowEdge[] };
+
+export function normalizeMinimumRole(value: unknown): MinimumRole | undefined {
+  if (value === undefined || value === '' || value === 'editor') return 'editor';
+  return value === 'admin' ? 'admin' : undefined;
 }
 
 export interface Facets {
@@ -68,11 +98,12 @@ export interface Listing {
   source: SourceStatus;
   summary: Summary;
   facets: Facets;
+  levels: Level[];
+  severityKey: string;
+  policyRevision: number;
 }
 
 export type ErrorKind = 'forbidden' | 'missing' | 'invalid' | 'unavailable';
-
-export type SeverityTone = 'critical' | 'warning' | 'info' | 'unknown';
 
 export interface ActivityItem {
   id: string;
@@ -107,34 +138,21 @@ export function isAcknowledged(problem: Problem): boolean {
   return Boolean(problem.acknowledgedBy.trim());
 }
 
-export function severityTone(severity: string | undefined): SeverityTone {
-  switch ((severity ?? '').trim().toLowerCase()) {
-    case 'critical':
-    case 'disaster':
-    case 'high':
-      return 'critical';
-    case 'warning':
-    case 'average':
-      return 'warning';
-    case 'info':
-    case 'information':
-      return 'info';
-    default:
-      return 'unknown';
+export function levelDisplay(problem: Problem, levels: Level[], severityKey: string, language: 'ru' | 'en'): { label: string; tone: LevelTone } {
+  const level = levels.find((item) => item.id === problem.levelId);
+  const raw = problem.labels[severityKey] ?? '';
+  if (!level) {
+    return { label: raw || dictionaries[language].summary.retired(problem.levelId), tone: 'grey' };
   }
+  return { label: raw && !level.aliases.some((alias) => alias.toLowerCase() === raw.toLowerCase()) ? raw : level.name[language], tone: level.tone };
 }
 
-export function severityRank(severity: string | undefined): number {
-  switch (severityTone(severity)) {
-    case 'critical':
-      return 3;
-    case 'warning':
-      return 2;
-    case 'info':
-      return 1;
-    default:
-      return 0;
-  }
+export function compareLevels(left: Level, right: Level): number {
+  return right.rank - left.rank || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+}
+
+export function levelColor(theme: GrafanaTheme2, tone: LevelTone): string {
+  return tone === 'grey' ? theme.colors.text.secondary : theme.visualization.getColorByName(tone);
 }
 
 export function elapsedMs(problem: Problem, now: number): number | undefined {

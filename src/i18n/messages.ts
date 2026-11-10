@@ -16,7 +16,32 @@ function ruCount(count: number, one: string, few: string, many: string): string 
   return `${count} ${many}`;
 }
 
+export interface PolicyMessages {
+  title: string; revision: string; severityKey: string; levels: string; workflows: string; routing: string; views: string;
+  id: string; rank: string; tone: string; nameRu: string; nameEn: string; aliases: string; alias: string; minimumRole: string; roleEditor: string; roleAdmin: string;
+  addLevel: string; addAlias: string; addWorkflow: string; addState: string; addTransition: string; addRoute: string;
+  remove: string; up: string; down: string; initialState: string; startRequires: string; states: string;
+  operatorComplete: string; transitions: string; from: string; to: string; requires: string;
+  labels: string; labelKey: string; labelValue: string; addLabel: string; optionalLevel: string; workflow: string;
+  defaultWorkflow: string; none: string; recent: string; history: string; columns: string; recoveredTrust: string;
+  sourceHelp: string; literalHelp: string; validatePreview: string; samples: string; addSample: string;
+  acknowledged: string; assignee: string; sourceStatus: string; comment: string; result: string; matched: string;
+  canStart: string; missing: string; yes: string; no: string; validationOk: string; validationFailed: string;
+  save: string; saved: string; loadFailed: string; requestFailed: string; historyFailed: string;
+  conflictTitle: string; conflictBody: string; conflictUnavailable: string; conflictRevisions: (base: number, latest?: number) => string;
+  latestPolicy: string; loadCurrentPolicy: string; replaceCurrentPolicy: string; currentLoaded: string;
+  confirmLoadTitle: string; confirmLoadBody: string; confirmReplaceTitle: string; confirmReplaceBody: string;
+  historyTitle: string; openRevision: string; loadDraft: string; revisionPreview: string; json: string; jsonHelp: string;
+  import: string; export: string; importFailed: string; imported: string; duplicateLabels: string; busy: string;
+  issueUnknown: string; occupancy: string;
+  issues: Record<'required' | 'invalid' | 'duplicate' | 'too_many' | 'too_long' | 'unknown_ref' | 'self_loop' | 'unreachable' | 'reserved_id' | 'immutable', string>;
+  gates: Record<'ack' | 'owner' | 'comment' | 'sourceRecovered', string>;
+  tones: Record<'red' | 'orange' | 'yellow' | 'blue' | 'green' | 'purple' | 'grey', string>;
+  columnNames: Record<'level' | 'name' | 'status' | 'started' | 'duration' | 'owner' | 'ack', string>;
+}
+
 export interface Messages {
+  policy: PolicyMessages;
   common: {
     appName: string;
     loading: string;
@@ -72,6 +97,10 @@ export interface Messages {
     searchPlaceholder: string;
     severity: string;
     severityAll: string;
+    workflow: string;
+    workflowAll: string;
+    workState: string;
+    workStateAll: string;
     host: string;
     hostPlaceholder: string;
     assignee: string;
@@ -115,8 +144,7 @@ export interface Messages {
     acknowledged: string;
     unacknowledged: string;
     unassigned: string;
-    critical: string;
-    warning: string;
+    retired: (id: string) => string;
   };
   table: {
     caption: string;
@@ -137,11 +165,10 @@ export interface Messages {
     active: string;
     recovered: string;
   };
-  severity: {
-    critical: string;
-    warning: string;
-    info: string;
-    unknown: string;
+  workflow: {
+    title: string; untracked: string; select: string; choose: string; start: string; comment: string;
+    retired: string; conflict: string; error: string; stale: string; staleState: string; staleRevision: string; adminRequired: string; untrusted: string; missing: string;
+    ack: string; owner: string; sourceRecovered: string;
   };
   ack: {
     acknowledged: string;
@@ -273,6 +300,28 @@ export interface Messages {
 }
 
 const en: Messages = {
+  policy: {
+    title: 'Organization policy', revision: 'Current revision', severityKey: 'Source severity label', levels: 'Levels', workflows: 'Workflows', routing: 'Routing', views: 'View defaults',
+    id: 'ID', rank: 'Rank', tone: 'Tone', nameRu: 'Russian name', nameEn: 'English name', aliases: 'Aliases', alias: 'Alias', minimumRole: 'Minimum role', roleEditor: 'Editor', roleAdmin: 'Admin',
+    addLevel: 'Add level', addAlias: 'Add alias', addWorkflow: 'Add workflow', addState: 'Add state', addTransition: 'Add transition', addRoute: 'Add route',
+    remove: 'Remove', up: 'Move up', down: 'Move down', initialState: 'Initial state', startRequires: 'Start requirements', states: 'States',
+    operatorComplete: 'Operator work complete', transitions: 'Transitions', from: 'From', to: 'To', requires: 'Requirements',
+    labels: 'Exact labels', labelKey: 'Label key', labelValue: 'Label value', addLabel: 'Add label', optionalLevel: 'Level (optional)', workflow: 'Workflow',
+    defaultWorkflow: 'Default workflow', none: 'None', recent: 'Recent window', history: 'History window', columns: 'Columns', recoveredTrust: 'Source trust (minutes)',
+    sourceHelp: 'A successful source snapshot is trusted for 5 to 1440 minutes.', literalHelp: 'Label keys and values are exact, including spaces and empty values. Routes are evaluated in order.',
+    validatePreview: 'Validate and preview', samples: 'Preview samples', addSample: 'Add sample', acknowledged: 'Acknowledged', assignee: 'Owner', sourceStatus: 'Source status', comment: 'Comment',
+    result: 'Preview result', matched: 'Alias matched', canStart: 'Can start', missing: 'Missing requirements', yes: 'Yes', no: 'No', validationOk: 'Policy is valid.', validationFailed: 'Policy has validation issues.',
+    save: 'Save policy', saved: 'Policy saved.', loadFailed: 'Could not load the policy.', requestFailed: 'The policy request failed.', historyFailed: 'Could not load revision history.',
+    conflictTitle: 'The policy changed in another session', conflictBody: 'Your draft is kept and saving is blocked. Load the current policy to discard the draft, or explicitly replace the current policy with the draft. A newer server change will block saving again.', conflictUnavailable: 'Could not load the current policy revision.', conflictRevisions: (base, latest) => latest === undefined ? `Your draft is based on revision ${base}.` : `Your draft is based on revision ${base}; the server is at revision ${latest}.`,
+    latestPolicy: 'Current policy on the server', loadCurrentPolicy: 'Load current policy', replaceCurrentPolicy: 'Replace current with my draft', currentLoaded: 'The current policy was loaded as the draft; the previous draft was discarded.',
+    confirmLoadTitle: 'Replace your local draft?', confirmLoadBody: 'Loading the current policy discards your unsaved local draft. This cannot be undone. Download your draft as JSON first if you need it.', confirmReplaceTitle: 'Replace the current policy?', confirmReplaceBody: 'Your draft will overwrite the revision currently on the server, including changes made by others. The server still checks the revision, and a newer change will block saving again.',
+    historyTitle: 'Revision history', openRevision: 'Open revision', loadDraft: 'Load as draft', revisionPreview: 'Read-only revision', json: 'JSON import and export', jsonHelp: 'Only policy fields are accepted; Grafana source settings and credentials are not part of the policy.',
+    import: 'Import JSON', export: 'Download JSON', importFailed: 'Invalid policy JSON or unsupported fields.', imported: 'JSON loaded as a draft.', duplicateLabels: 'Label keys must be unique within each set.', busy: 'Working…', issueUnknown: 'Validation issue', occupancy: 'Tracked episodes prevent removing this workflow or state',
+    issues: { required: 'Required', invalid: 'Invalid value', duplicate: 'Duplicate', too_many: 'Too many entries', too_long: 'Too long', unknown_ref: 'Unknown reference', self_loop: 'Self-transition', unreachable: 'Unreachable state', reserved_id: 'Reserved ID', immutable: 'Cannot remove an occupied ID' },
+    gates: { ack: 'Acknowledgement', owner: 'Owner', comment: 'Comment', sourceRecovered: 'Recovered source' },
+    tones: { red: 'Red', orange: 'Orange', yellow: 'Yellow', blue: 'Blue', green: 'Green', purple: 'Purple', grey: 'Grey' },
+    columnNames: { level: 'Severity', name: 'Problem', status: 'Source status', started: 'Started', duration: 'Duration', owner: 'Owner', ack: 'Acknowledgement' },
+  },
   common: {
     appName: 'Problem Desk',
     loading: 'Loading…',
@@ -328,6 +377,10 @@ const en: Messages = {
     searchPlaceholder: 'Rule, host, label value…',
     severity: 'Severity',
     severityAll: 'All severities',
+    workflow: 'Workflow',
+    workflowAll: 'All workflows',
+    workState: 'Operator state',
+    workStateAll: 'All operator states',
     host: 'Host',
     hostPlaceholder: 'Host contains…',
     assignee: 'Owner',
@@ -371,8 +424,7 @@ const en: Messages = {
     acknowledged: 'Acknowledged',
     unacknowledged: 'Unacknowledged',
     unassigned: 'Unassigned',
-    critical: 'Critical',
-    warning: 'Warning',
+    retired: (id) => `retired: ${id}`,
   },
   table: {
     caption: 'Alert episodes',
@@ -393,11 +445,13 @@ const en: Messages = {
     active: 'Active',
     recovered: 'Recovered',
   },
-  severity: {
-    critical: 'Critical',
-    warning: 'Warning',
-    info: 'Info',
-    unknown: 'Unspecified',
+  workflow: {
+    title: 'Workflow', untracked: 'This episode has no workflow.', select: 'Workflow', choose: 'Choose a workflow',
+    start: 'Start workflow', comment: 'Workflow comment', retired: 'This workflow or state is retired.',
+    conflict: 'The source is active while operator work is complete. Reopen it using an available transition.',
+    error: 'The workflow request failed.', stale: 'The workflow changed. Refresh and try again.', staleState: 'The workflow state changed. Review the refreshed state and try again.', staleRevision: 'The policy changed. Review the refreshed workflow and try again.', adminRequired: 'Admin role required.',
+    untrusted: 'The source state is not trusted yet.', missing: 'Missing requirements',
+    ack: 'Acknowledgement', owner: 'Owner', sourceRecovered: 'Recovered source',
   },
   ack: {
     acknowledged: 'Acknowledged',
@@ -530,6 +584,28 @@ const en: Messages = {
 };
 
 const ru: Messages = {
+  policy: {
+    title: 'Политика организации', revision: 'Текущая ревизия', severityKey: 'Метка важности источника', levels: 'Уровни', workflows: 'Процессы', routing: 'Маршрутизация', views: 'Настройки представлений',
+    id: 'ID', rank: 'Ранг', tone: 'Цвет', nameRu: 'Название на русском', nameEn: 'Название на английском', aliases: 'Псевдонимы', alias: 'Псевдоним', minimumRole: 'Минимальная роль', roleEditor: 'Editor', roleAdmin: 'Admin',
+    addLevel: 'Добавить уровень', addAlias: 'Добавить псевдоним', addWorkflow: 'Добавить процесс', addState: 'Добавить состояние', addTransition: 'Добавить переход', addRoute: 'Добавить правило',
+    remove: 'Удалить', up: 'Вверх', down: 'Вниз', initialState: 'Начальное состояние', startRequires: 'Условия запуска', states: 'Состояния',
+    operatorComplete: 'Работа оператора завершена', transitions: 'Переходы', from: 'Из', to: 'В', requires: 'Условия',
+    labels: 'Точные метки', labelKey: 'Ключ метки', labelValue: 'Значение метки', addLabel: 'Добавить метку', optionalLevel: 'Уровень (необязательно)', workflow: 'Процесс',
+    defaultWorkflow: 'Процесс по умолчанию', none: 'Нет', recent: 'Окно Recent', history: 'Окно History', columns: 'Столбцы', recoveredTrust: 'Доверие к источнику (минуты)',
+    sourceHelp: 'Успешному снимку источника доверяют от 5 до 1440 минут.', literalHelp: 'Ключи и значения меток сравниваются точно, включая пробелы и пустые значения. Правила проверяются по порядку.',
+    validatePreview: 'Проверить и показать результат', samples: 'Образцы для проверки', addSample: 'Добавить образец', acknowledged: 'Подтверждено', assignee: 'Ответственный', sourceStatus: 'Состояние источника', comment: 'Комментарий',
+    result: 'Результат проверки', matched: 'Псевдоним совпал', canStart: 'Можно запустить', missing: 'Не выполнены условия', yes: 'Да', no: 'Нет', validationOk: 'Политика прошла проверку.', validationFailed: 'В политике есть ошибки.',
+    save: 'Сохранить политику', saved: 'Политика сохранена.', loadFailed: 'Не удалось загрузить политику.', requestFailed: 'Не удалось выполнить запрос политики.', historyFailed: 'Не удалось загрузить историю ревизий.',
+    conflictTitle: 'Политика изменилась в другой сессии', conflictBody: 'Черновик сохранён, но сохранение заблокировано. Загрузите текущую политику, чтобы отказаться от черновика, или явно замените текущую политику черновиком. Если на сервере появится более новая ревизия, сохранение снова будет заблокировано.', conflictUnavailable: 'Не удалось загрузить текущую ревизию политики.', conflictRevisions: (base, latest) => latest === undefined ? `Черновик основан на ревизии ${base}.` : `Черновик основан на ревизии ${base}; на сервере ревизия ${latest}.`,
+    latestPolicy: 'Текущая политика на сервере', loadCurrentPolicy: 'Загрузить текущую политику', replaceCurrentPolicy: 'Заменить текущую моим черновиком', currentLoaded: 'Текущая политика загружена как черновик; прежний черновик отброшен.',
+    confirmLoadTitle: 'Заменить локальный черновик?', confirmLoadBody: 'Загрузка текущей политики отбросит несохранённый черновик. Отменить это нельзя. Если черновик нужен, сначала скачайте его как JSON.', confirmReplaceTitle: 'Заменить текущую политику?', confirmReplaceBody: 'Черновик перезапишет ревизию, которая сейчас на сервере, включая изменения других пользователей. Сервер по-прежнему проверяет ревизию, и более новая правка снова заблокирует сохранение.',
+    historyTitle: 'История ревизий', openRevision: 'Открыть ревизию', loadDraft: 'Загрузить как черновик', revisionPreview: 'Ревизия только для чтения', json: 'Импорт и экспорт JSON', jsonHelp: 'Допустимы только поля политики; настройки источника Grafana и учётные данные в неё не входят.',
+    import: 'Импортировать JSON', export: 'Скачать JSON', importFailed: 'Некорректный JSON политики или неподдерживаемые поля.', imported: 'JSON загружен как черновик.', duplicateLabels: 'Ключи меток в одном наборе должны быть уникальны.', busy: 'Выполняется…', issueUnknown: 'Ошибка проверки', occupancy: 'Нельзя удалить процесс или состояние с отслеживаемыми эпизодами',
+    issues: { required: 'Обязательное поле', invalid: 'Недопустимое значение', duplicate: 'Повтор', too_many: 'Слишком много элементов', too_long: 'Слишком длинное значение', unknown_ref: 'Неизвестная ссылка', self_loop: 'Переход в то же состояние', unreachable: 'Недостижимое состояние', reserved_id: 'Зарезервированный ID', immutable: 'Нельзя удалить используемый ID' },
+    gates: { ack: 'Подтверждение', owner: 'Ответственный', comment: 'Комментарий', sourceRecovered: 'Восстановленный источник' },
+    tones: { red: 'Красный', orange: 'Оранжевый', yellow: 'Жёлтый', blue: 'Синий', green: 'Зелёный', purple: 'Фиолетовый', grey: 'Серый' },
+    columnNames: { level: 'Важность', name: 'Проблема', status: 'Состояние источника', started: 'Начало', duration: 'Длительность', owner: 'Ответственный', ack: 'Подтверждение' },
+  },
   common: {
     appName: 'Problem Desk',
     loading: 'Загрузка…',
@@ -585,6 +661,10 @@ const ru: Messages = {
     searchPlaceholder: 'Правило, хост, значение метки…',
     severity: 'Важность',
     severityAll: 'Любая важность',
+    workflow: 'Процесс',
+    workflowAll: 'Все процессы',
+    workState: 'Состояние оператора',
+    workStateAll: 'Все состояния оператора',
     host: 'Хост',
     hostPlaceholder: 'Хост содержит…',
     assignee: 'Ответственный',
@@ -628,8 +708,7 @@ const ru: Messages = {
     acknowledged: 'Подтверждённые',
     unacknowledged: 'Без подтверждения',
     unassigned: 'Без владельца',
-    critical: 'Критические',
-    warning: 'Предупреждения',
+    retired: (id) => `выведен: ${id}`,
   },
   table: {
     caption: 'Эпизоды алертов',
@@ -650,11 +729,13 @@ const ru: Messages = {
     active: 'Активна',
     recovered: 'Восстановлена',
   },
-  severity: {
-    critical: 'Критический',
-    warning: 'Предупреждение',
-    info: 'Информация',
-    unknown: 'Не указана',
+  workflow: {
+    title: 'Процесс', untracked: 'Для эпизода не запущен процесс.', select: 'Процесс', choose: 'Выберите процесс',
+    start: 'Запустить процесс', comment: 'Комментарий к процессу', retired: 'Процесс или состояние выведены из использования.',
+    conflict: 'Источник активен, но работа оператора завершена. Повторно откройте её доступным переходом.',
+    error: 'Не удалось выполнить запрос процесса.', stale: 'Процесс изменился. Обновите данные и повторите попытку.', staleState: 'Состояние процесса изменилось. Проверьте обновлённое состояние и повторите действие.', staleRevision: 'Политика изменилась. Проверьте обновлённый процесс и повторите действие.', adminRequired: 'Требуется роль Admin.',
+    untrusted: 'Состояние источника пока не подтверждено.', missing: 'Не выполнены условия',
+    ack: 'Подтверждение', owner: 'Ответственный', sourceRecovered: 'Восстановленный источник',
   },
   ack: {
     acknowledged: 'Подтверждено',

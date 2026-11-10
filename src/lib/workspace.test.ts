@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { clearSubmittedDraft, correctedOffset, submitCommentDraft, validLabelFilter } from './workspace';
+import { clearSubmittedDraft, correctedOffset, roleAllows, submitCommentDraft, validLabelFilter } from './workspace';
 
 describe('workspace response and draft state', () => {
+  it('enables only native roles meeting the required minimum', () => {
+    expect(roleAllows('Editor', 'editor')).toBe(true);
+    expect(roleAllows('Editor', 'admin')).toBe(false);
+    expect(roleAllows('Admin', 'editor')).toBe(true);
+    expect(roleAllows('Admin', 'admin')).toBe(true);
+    expect(roleAllows('Viewer', 'editor')).toBe(false);
+    expect(roleAllows(undefined, 'admin')).toBe(false);
+  });
   it('returns the last valid offset when a refreshed page shrinks', () => {
     expect(correctedOffset(50, 50, 50)).toBe(0);
     expect(correctedOffset(100, 50, 51)).toBe(50);

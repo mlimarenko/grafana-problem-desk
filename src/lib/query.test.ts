@@ -40,6 +40,33 @@ describe('workspace query', () => {
     expect(restored).toEqual(query);
   });
 
+  it('keeps source and operator filters separate in URLs and requests', () => {
+    const query = parseQuery('?view=history&state=active&workflow=ops&workState=investigating&severity=priority&sort=severity');
+    expect(parseQuery(`?${serializeQuery(query)}`)).toEqual(query);
+    expect(buildProblemsRequest(query, new Date())).toMatchObject({ state: 'active', workflow: 'ops', workState: 'investigating', severity: 'priority', sort: 'severity' });
+    expect(buildProblemsRequest(query, new Date())).not.toHaveProperty('level');
+  });
+
+  it('uses policy view defaults only without an explicit range', () => {
+    const defaults = { recent: '1h' as const, history: '30d' as const };
+    expect(parseQuery('?view=recent', defaults).range).toBe('1h');
+    expect(parseQuery('?view=history', defaults).range).toBe('30d');
+    expect(parseQuery('?view=history&range=7d', defaults).range).toBe('7d');
+    expect(withView(parseQuery(''), 'history', defaults).range).toBe('30d');
+    const recent = parseQuery('?view=recent', defaults);
+    expect(withView(recent, 'history', defaults).range).toBe('30d');
+    expect(serializeQuery(recent).has('range')).toBe(false);
+    expect(withView(parseQuery('?view=recent&range=7d', defaults), 'history', defaults).range).toBe('7d');
+  });
+
+  it('builds the first policy-ready request from the current address', () => {
+    const now = new Date('2026-11-10T12:00:00Z');
+    const defaults = { recent: '1h' as const, history: '30d' as const };
+    const address = '?view=recent&severity=urgent&workflow=ops&workState=new';
+    expect(buildProblemsRequest(parseQuery(address, defaults), now)).toMatchObject({ from: '2026-11-10T11:00:00.000Z', severity: 'urgent', workflow: 'ops', workState: 'new' });
+    expect(buildProblemsRequest(parseQuery(`${address}&range=7d`, defaults), now).from).toBe('2026-11-03T12:00:00.000Z');
+  });
+
   it('preserves literal and empty label values in URLs and requests', () => {
     for (const value of [' prod ', '', '100%_']) {
       const params = new URLSearchParams({ labelKey: ' env ', labelValue: value });
