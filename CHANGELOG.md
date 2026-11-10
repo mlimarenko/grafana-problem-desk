@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+Interpret Grafana runtime states with informational reasons, including `Normal (NoData)`, without blocking synchronization of valid snapshots.
+
 ## 0.2.1
 
 Keep existing problem states while Grafana's alerting runtime is initializing, rather than interpreting its temporary empty Alertmanager response as recovery.

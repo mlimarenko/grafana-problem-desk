@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type configuredRule struct {
@@ -28,6 +29,56 @@ type runtimeAlert struct {
 	State    string            `json:"state"`
 	Labels   map[string]string `json:"labels"`
 	ActiveAt string            `json:"activeAt"`
+}
+
+type instanceState string
+
+const (
+	stateNormal     instanceState = "Normal"
+	statePending    instanceState = "Pending"
+	stateAlerting   instanceState = "Alerting"
+	stateRecovering instanceState = "Recovering"
+	stateNoData     instanceState = "NoData"
+	stateError      instanceState = "Error"
+)
+
+// Grafana formats an instance as the base state followed by an optional reason.
+func parseInstanceState(raw string) (instanceState, error) {
+	base, suffix, hasReason := strings.Cut(raw, " (")
+	if hasReason {
+		if !strings.HasSuffix(suffix, ")") {
+			return "", errors.New("invalid runtime alert state")
+		}
+		reason := suffix[:len(suffix)-1]
+		if strings.TrimSpace(reason) == "" {
+			return "", errors.New("invalid runtime alert state")
+		}
+		depth := 0
+		for _, r := range reason {
+			if unicode.IsControl(r) {
+				return "", errors.New("invalid runtime alert state")
+			}
+			switch r {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth < 0 {
+					return "", errors.New("invalid runtime alert state")
+				}
+			}
+		}
+		if depth != 0 {
+			return "", errors.New("invalid runtime alert state")
+		}
+	}
+	state := instanceState(base)
+	switch state {
+	case stateNormal, statePending, stateAlerting, stateRecovering, stateNoData, stateError:
+		return state, nil
+	default:
+		return "", errors.New("invalid runtime alert state")
+	}
 }
 
 type runtimeRule struct {
@@ -180,23 +231,25 @@ func (s *Syncer) verifyReadiness(ctx context.Context, base *url.URL, token strin
 						labels[key] = value
 					}
 				}
-				switch instance.State {
-				case "Pending", "Pending (NoData)", "Pending (Error)":
+				state, err := parseInstanceState(instance.State)
+				if err != nil {
+					return err
+				}
+				switch state {
+				case statePending:
 					hasPending = true
 					continue
-				case "Normal":
+				case stateNormal:
 					continue
-				case "NoData", "Error":
+				case stateNoData, stateError:
 					labels["rulename"] = labels["alertname"]
-					if instance.State == "NoData" {
+					if state == stateNoData {
 						labels["alertname"] = "DatasourceNoData"
 					} else {
 						labels["alertname"] = "DatasourceError"
 					}
-				case "Alerting", "Recovering":
+				case stateAlerting, stateRecovering:
 					hasFiring = true
-				default:
-					return errors.New("invalid runtime alert state")
 				}
 				start, err := NormalizeTimestamp(instance.ActiveAt)
 				_, delivered := deliveries[deliveryKey(rule.UID, start, labels)]
