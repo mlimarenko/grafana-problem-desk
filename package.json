@@ -1,6 +1,6 @@
 {
   "name": "grafana-problem-desk",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "license": "MIT",
   "description": "Organization-shared problem episodes, comments and acknowledgement inside Grafana",

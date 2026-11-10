@@ -98,6 +98,19 @@ type AssignRequest struct {
 	Assignee string `json:"assignee"`
 }
 
+type AssigneeMember struct {
+	UID   string `json:"uid"`
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
+type AssigneeCatalog struct {
+	Revision  int64            `json:"revision"`
+	UpdatedAt string           `json:"updatedAt"`
+	UpdatedBy string           `json:"updatedBy"`
+	Members   []AssigneeMember `json:"members"`
+}
+
 // SyncResponse represents the response for POST /sync.
 type SyncResponse struct {
 	Success bool         `json:"success"`

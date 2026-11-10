@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 	"github.com/mlimarenko/grafana-problem-desk/pkg/storage"
 	problemsync "github.com/mlimarenko/grafana-problem-desk/pkg/sync"
 )
@@ -64,6 +65,9 @@ func TestRuntimeInstanceStateReasons(t *testing.T) {
 			}
 			id := before[0].ID
 			if _, err := store.AcknowledgeProblem(ctx, 1, id, "operator", "note"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.PutAssignees(ctx, 1, "admin", 0, []models.AssigneeMember{{UID: "owner", Login: "owner"}}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := store.AssignProblem(ctx, 1, id, "operator", "owner"); err != nil {

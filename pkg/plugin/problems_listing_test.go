@@ -114,6 +114,9 @@ func TestListingViewsFiltersAndIsolation(t *testing.T) {
 	if r = list(q.Encode()); r.Total != 0 {
 		t.Fatalf("literal label key: %+v", r)
 	}
+	if _, err = s.PutAssignees(ctx, 1, "admin", 0, []models.AssigneeMember{{UID: "alice", Login: "alice"}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = s.AssignProblem(ctx, 1, longID, "operator", "alice"); err != nil {
 		t.Fatal(err)
 	}

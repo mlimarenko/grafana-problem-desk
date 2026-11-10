@@ -66,6 +66,17 @@ export interface Messages {
     localZone: (zone: string) => string;
     utc: string;
   };
+  participants: {
+    title: string;
+    update: string;
+    updating: string;
+    hint: string;
+    updated: (count: number) => string;
+    errors: Record<
+      'forbidden' | 'org-mismatch' | 'malformed' | 'duplicate' | 'over-limit' | 'conflict' | 'invalid-response' | 'unavailable',
+      string
+    >;
+  };
   tabs: {
     label: string;
     problems: string;
@@ -251,6 +262,15 @@ export interface Messages {
     ownerHint: string;
     saveOwner: string;
     saving: string;
+    assigneeLoading: string;
+    assigneeLoadFailed: string;
+    assigneeNotPublished: string;
+    assigneeEmpty: string;
+    assigneeLegacy: string;
+    assigneeSnapshot: (updated: string, actor: string) => string;
+    assigneeUnavailable: string;
+    assigneeUnavailableTitle: string;
+    assigneeNoOptions: string;
     acknowledge: string;
     unacknowledge: string;
     ackHint: string;
@@ -345,6 +365,23 @@ const en: Messages = {
     timeZone: 'Time zone',
     localZone: (zone) => `Local (${zone})`,
     utc: 'UTC',
+  },
+  participants: {
+    title: 'Assignee participants',
+    update: 'Update participants',
+    updating: 'Updating…',
+    hint: 'The organization administrator publishes this snapshot from Grafana. It is the only source of assignee choices.',
+    updated: (count) => `Participant snapshot published: ${enCount(count, 'member', 'members')}.`,
+    errors: {
+      forbidden: 'The publication was rejected: the session is not an organization administrator, or the organization changed. Nothing was published.',
+      'org-mismatch': 'Grafana reports a different organization than this page. Nothing was published.',
+      malformed: 'The participant data is incomplete or malformed. Nothing was published.',
+      duplicate: 'The Grafana organization response contains duplicate members. Nothing was published.',
+      'over-limit': 'The participant list exceeds 5000 members. Nothing was published.',
+      conflict: 'Another administrator changed the participant snapshot. The current snapshot is being reloaded; choose Update participants again to publish this roster.',
+      'invalid-response': 'The server returned an invalid participant snapshot. The previous snapshot is kept.',
+      unavailable: 'Could not load the organization participants. The previous snapshot is kept.',
+    },
   },
   tabs: {
     label: 'Problem views',
@@ -530,10 +567,19 @@ const en: Messages = {
       episode: 'Episode',
     },
     owner: 'Owner label',
-    ownerPlaceholder: 'Login or team name',
+    ownerPlaceholder: 'Search participants',
     ownerHint: 'The owner label does not grant permissions.',
     saveOwner: 'Save owner',
     saving: 'Saving…',
+    assigneeLoading: 'Loading participants…',
+    assigneeLoadFailed: 'Could not load the participant list. Any previously loaded list is kept.',
+    assigneeNotPublished: 'No participant snapshot has been published yet. An organization administrator can update it.',
+    assigneeEmpty: 'The published participant list is empty.',
+    assigneeLegacy: 'not in participant list',
+    assigneeSnapshot: (updated, actor) => `Participant snapshot updated ${updated} by ${actor}.`,
+    assigneeUnavailable: 'This owner is not in the published participant list. The list was refreshed and your choice was kept; review it and save again.',
+    assigneeUnavailableTitle: 'Owner not in participant list',
+    assigneeNoOptions: 'No matching participants.',
     acknowledge: 'Acknowledge',
     unacknowledge: 'Remove acknowledgement',
     ackHint: 'Acknowledgement does not mute notifications or resolve the alert.',
@@ -629,6 +675,23 @@ const ru: Messages = {
     timeZone: 'Часовой пояс',
     localZone: (zone) => `Локальный (${zone})`,
     utc: 'UTC',
+  },
+  participants: {
+    title: 'Участники организации',
+    update: 'Обновить участников',
+    updating: 'Обновление…',
+    hint: 'Снимок участников публикует администратор организации из Grafana. Только он служит источником выбора ответственного.',
+    updated: (count) => `Снимок участников опубликован: ${ruCount(count, 'участник', 'участника', 'участников')}.`,
+    errors: {
+      forbidden: 'Публикация отклонена: сессия не является администратором организации или организация изменилась. Ничего не опубликовано.',
+      'org-mismatch': 'Grafana сообщает о другой организации, чем эта страница. Ничего не опубликовано.',
+      malformed: 'Данные участников неполные или повреждены. Ничего не опубликовано.',
+      duplicate: 'В ответе Grafana есть повторяющиеся участники. Ничего не опубликовано.',
+      'over-limit': 'Участников больше 5000. Ничего не опубликовано.',
+      conflict: 'Другой администратор уже изменил снимок участников. Актуальный снимок перезагружается; нажмите «Обновить участников» ещё раз, чтобы опубликовать текущий состав.',
+      'invalid-response': 'Сервер вернул некорректный снимок участников. Прежний снимок сохранён.',
+      unavailable: 'Не удалось получить участников организации. Прежний снимок сохранён.',
+    },
   },
   tabs: {
     label: 'Представления проблем',
@@ -814,10 +877,19 @@ const ru: Messages = {
       episode: 'Эпизод',
     },
     owner: 'Метка ответственного',
-    ownerPlaceholder: 'Логин или название команды',
+    ownerPlaceholder: 'Поиск участника',
     ownerHint: 'Метка ответственного не выдаёт прав доступа.',
     saveOwner: 'Сохранить ответственного',
     saving: 'Сохранение…',
+    assigneeLoading: 'Загрузка списка участников…',
+    assigneeLoadFailed: 'Не удалось загрузить список участников. Ранее загруженный список сохранён, если он был.',
+    assigneeNotPublished: 'Снимок участников ещё не опубликован. Его может обновить администратор организации.',
+    assigneeEmpty: 'Опубликованный список участников пуст.',
+    assigneeLegacy: 'нет в списке участников',
+    assigneeSnapshot: (updated, actor) => `Снимок участников обновлён ${updated}, ${actor}.`,
+    assigneeUnavailable: 'Выбранный ответственный отсутствует в опубликованном списке. Список обновлён, выбор сохранён — проверьте его и сохраните ещё раз.',
+    assigneeUnavailableTitle: 'Ответственный не в списке участников',
+    assigneeNoOptions: 'Нет подходящих участников.',
     acknowledge: 'Подтвердить',
     unacknowledge: 'Снять подтверждение',
     ackHint: 'Подтверждение не отключает уведомления и не закрывает алерт.',

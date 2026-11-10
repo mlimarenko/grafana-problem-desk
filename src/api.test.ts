@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@grafana/runtime', () => ({ getBackendSrv: vi.fn() }));
 
 import { getBackendSrv } from '@grafana/runtime';
-import { fetchPolicy, fetchWorkflow, normalizeListing, previewPolicy, savePolicy, startWorkflow, transitionWorkflow } from './api';
+import { fetchAssignees, fetchPolicy, fetchWorkflow, normalizeListing, previewPolicy, savePolicy, startWorkflow, transitionWorkflow, updateParticipants } from './api';
 
 describe('listing normalization', () => {
   it('preserves level counts in a prototype-safe dictionary', () => {
@@ -90,5 +90,78 @@ describe('policy and workflow response boundaries', () => {
     const doc = { schemaVersion: 1 } as const;
     expect(await savePolicy(7, doc as Parameters<typeof savePolicy>[1])).toEqual({ revision: 8 });
     expect(put.mock.calls[0][1]).toEqual({ baseRevision: 7, doc });
+  });
+});
+
+describe('assignee catalog boundary', () => {
+  const member = { uid: 'uid-editor', login: 'dev227-editor', name: 'Synthetic Editor' };
+  const orgRow = (overrides: Record<string, unknown> = {}) => ({
+    orgId: 1,
+    userId: 2,
+    uid: member.uid,
+    email: 'editor@example.test',
+    name: member.name,
+    avatarUrl: 'https://example.test/avatar.png',
+    login: member.login,
+    role: 'Editor',
+    isDisabled: false,
+    ...overrides,
+  });
+  const published = { revision: 4, updatedAt: '2026-11-10T00:00:00Z', updatedBy: 'admin', members: [member] };
+
+  it('reads an unpublished or malformed assignee snapshot', async () => {
+    const get = vi.fn().mockResolvedValue({ revision: 0, updatedAt: '', updatedBy: '', members: [] });
+    vi.mocked(getBackendSrv).mockReturnValue({ get } as unknown as ReturnType<typeof getBackendSrv>);
+    expect(await fetchAssignees()).toEqual({ revision: 0, updatedAt: '', updatedBy: '', members: [] });
+    get.mockResolvedValue(published);
+    expect(await fetchAssignees()).toEqual(published);
+    get.mockResolvedValue({ revision: 4, updatedAt: '', updatedBy: 'admin', members: [{ uid: 'u', login: 'l' }] });
+    await expect(fetchAssignees()).rejects.toMatchObject({ reason: 'invalid-response' });
+  });
+
+  it('publishes the complete enabled native roster with only uid, login and name', async () => {
+    const get = vi.fn().mockImplementation((url: string) =>
+      url === '/api/org' ? { id: 1, name: 'Main' } : [orgRow(), orgRow({ userId: 3, uid: 'uid-viewer', login: 'dev227-viewer', name: 'Synthetic Viewer' }), orgRow({ userId: 4, uid: 'uid-disabled', login: 'disabled', isDisabled: true })]
+    );
+    const put = vi.fn().mockResolvedValue(published);
+    vi.mocked(getBackendSrv).mockReturnValue({ get, put } as unknown as ReturnType<typeof getBackendSrv>);
+    expect(await updateParticipants(1, 3)).toEqual(published);
+    expect(get.mock.calls.map((call) => call[0])).toEqual(['/api/org', '/api/org/users']);
+    expect(put.mock.calls[0][1]).toEqual({
+      orgId: 1,
+      baseRevision: 3,
+      members: [member, { uid: 'uid-viewer', login: 'dev227-viewer', name: 'Synthetic Viewer' }],
+    });
+    expect(JSON.stringify(put.mock.calls[0][1])).not.toContain('email');
+    expect(JSON.stringify(put.mock.calls[0][1])).not.toContain('avatar');
+  });
+
+  it('never publishes when the organization identity differs', async () => {
+    const get = vi.fn().mockResolvedValue({ id: 2, name: 'Other' });
+    const put = vi.fn();
+    vi.mocked(getBackendSrv).mockReturnValue({ get, put } as unknown as ReturnType<typeof getBackendSrv>);
+    await expect(updateParticipants(1, 3)).rejects.toMatchObject({ reason: 'org-mismatch' });
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('never publishes from a forbidden or incomplete native fetch', async () => {
+    const put = vi.fn();
+    const get = vi.fn().mockRejectedValue({ status: 403 });
+    vi.mocked(getBackendSrv).mockReturnValue({ get, put } as unknown as ReturnType<typeof getBackendSrv>);
+    await expect(updateParticipants(1, 3)).rejects.toMatchObject({ reason: 'forbidden' });
+
+    const usersGet = vi.fn().mockImplementation((url: string) => (url === '/api/org' ? { id: 1 } : { users: [orgRow()] }));
+    vi.mocked(getBackendSrv).mockReturnValue({ get: usersGet, put } as unknown as ReturnType<typeof getBackendSrv>);
+    await expect(updateParticipants(1, 3)).rejects.toMatchObject({ reason: 'malformed' });
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('reports a stale snapshot conflict without overwriting the peer', async () => {
+    const get = vi.fn().mockImplementation((url: string) => (url === '/api/org' ? { id: 1 } : [orgRow()]));
+    const put = vi.fn().mockRejectedValue({ status: 409 });
+    vi.mocked(getBackendSrv).mockReturnValue({ get, put } as unknown as ReturnType<typeof getBackendSrv>);
+    await expect(updateParticipants(1, 3)).rejects.toMatchObject({ reason: 'conflict' });
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(put.mock.calls[0][1]).toMatchObject({ baseRevision: 3 });
   });
 });

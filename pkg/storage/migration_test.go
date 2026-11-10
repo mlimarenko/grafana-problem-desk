@@ -124,8 +124,8 @@ func TestLegacyV02MigrationPreservesRowsAndBackfillsLevel(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 {
-		t.Fatalf("user_version = %d, want 1", version)
+	if version != 2 {
+		t.Fatalf("user_version = %d, want 2", version)
 	}
 
 	expectedLevels := map[string]string{"p-warning": "warning", "p-critical": "critical", "p-none": "unknown"}
@@ -177,7 +177,7 @@ func TestLegacyV02MigrationPreservesRowsAndBackfillsLevel(t *testing.T) {
 		t.Fatalf("reopen migrated database: %v", err)
 	}
 	defer reopened.Close()
-	if err := reopened.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 1 {
+	if err := reopened.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 2 {
 		t.Fatalf("version after reopen = %d, %v", version, err)
 	}
 	problem, err := reopened.GetProblemByID(ctx, 1, "p-warning")
@@ -196,7 +196,7 @@ func TestFutureSchemaVersionFailsClosed(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE problems (id TEXT PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`PRAGMA user_version = 2`); err != nil {
+	if _, err := db.Exec(`PRAGMA user_version = 3`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -213,7 +213,7 @@ func TestFutureSchemaVersionFailsClosed(t *testing.T) {
 	}
 	defer check.Close()
 	var version int
-	if err := check.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := check.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
 		t.Fatalf("future version changed to %d, %v", version, err)
 	}
 	var tables int
@@ -222,5 +222,44 @@ func TestFutureSchemaVersionFailsClosed(t *testing.T) {
 	}
 	if tables != 0 {
 		t.Fatal("failed open wrote policy tables")
+	}
+}
+
+func TestSchemaOneCatalogMigrationPreservesHumanData(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "schema1.db")
+	legacy := openLegacyDatabase(t, path)
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := problemSnapshot(t, s.db, "p-warning")
+	if _, err = s.db.Exec(`DROP TABLE assignee_members; DROP TABLE assignee_catalogs; PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if after := problemSnapshot(t, s.db, "p-warning"); after != before {
+		t.Fatalf("problem changed: %s", after)
+	}
+	comments, err := s.GetComments(ctx, 1, "p-warning")
+	if err != nil || len(comments) != 1 || comments[0].Body != "legacy note" {
+		t.Fatalf("comments: %+v %v", comments, err)
+	}
+	events, err := s.GetEvents(ctx, 1, "p-warning")
+	if err != nil || len(events) != 2 {
+		t.Fatalf("events: %+v %v", events, err)
+	}
+	if c, err := s.GetAssignees(ctx, 1); err != nil || c.Revision != 0 || len(c.Members) != 0 {
+		t.Fatalf("catalog: %+v %v", c, err)
 	}
 }

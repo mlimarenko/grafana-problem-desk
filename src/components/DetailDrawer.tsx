@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import type { GrafanaTheme2 } from '@grafana/data';
-import { Alert, Button, Icon, IconButton, Input, LoadingPlaceholder, TextArea, useStyles2 } from '@grafana/ui';
+import { Alert, Button, Icon, IconButton, LoadingPlaceholder, Select, TextArea, useStyles2 } from '@grafana/ui';
+import type { AssigneeCatalog, AssigneeOption } from '../lib/assignees';
 import {
   assignmentTarget,
   elapsedMs,
@@ -35,6 +36,11 @@ interface Props {
   busyAction?: BusyAction;
   draft: string;
   ownerDraft: string;
+  assigneeOptions: AssigneeOption[];
+  assigneeCatalog?: AssigneeCatalog;
+  assigneeLoading: boolean;
+  assigneeError?: ErrorKind;
+  assigneeNotice?: string;
   canWrite: boolean;
   levels: Level[];
   severityKey: string;
@@ -44,6 +50,7 @@ interface Props {
   onOwnerDraftChange: (value: string) => void;
   onClose: () => void;
   onRetry: () => void;
+  onRetryAssignees: () => void;
   onAck: () => void;
   onUnack: () => void;
   onAssign: () => void;
@@ -59,6 +66,11 @@ export function DetailDrawer({
   busyAction,
   draft,
   ownerDraft,
+  assigneeOptions,
+  assigneeCatalog,
+  assigneeLoading,
+  assigneeError,
+  assigneeNotice,
   canWrite,
   levels,
   severityKey,
@@ -68,6 +80,7 @@ export function DetailDrawer({
   onOwnerDraftChange,
   onClose,
   onRetry,
+  onRetryAssignees,
   onAck,
   onUnack,
   onAssign,
@@ -337,23 +350,57 @@ export function DetailDrawer({
                     {m.drawer.owner}
                   </label>
                   <div className={styles.inlineRow}>
-                    <Input
-                      id="problem-owner"
-                      name="assignee"
-                      value={ownerDraft}
-                      maxLength={255}
+                    <Select<string>
+                      inputId="problem-owner"
+                      aria-label={m.drawer.owner}
+                      isSearchable={true}
+                      isClearable={true}
+                      allowCustomValue={false}
+                      isLoading={assigneeLoading}
+                      disabled={Boolean(busyAction) || (assigneeLoading && !assigneeCatalog)}
+                      options={assigneeOptions}
+                      value={ownerDraft || null}
                       placeholder={m.drawer.ownerPlaceholder}
-                      onChange={(event) => onOwnerDraftChange(event.currentTarget.value)}
+                      noOptionsMessage={m.drawer.assigneeNoOptions}
+                      onChange={(option) => onOwnerDraftChange(option?.value ?? '')}
                     />
                     <Button
                       type="submit"
                       variant="secondary"
                       size="sm"
-                      disabled={Boolean(busyAction) || ownerDraft.trim() === (problem.assignee ?? '')}
+                      disabled={Boolean(busyAction) || ownerDraft === (problem.assignee ?? '')}
                     >
                       {busyAction === 'assign' ? m.drawer.saving : m.drawer.saveOwner}
                     </Button>
                   </div>
+                  {assigneeError && (
+                    <Alert title={m.drawer.assigneeLoadFailed} severity="warning">
+                      <Button variant="secondary" size="sm" onClick={onRetryAssignees}>
+                        {m.common.retry}
+                      </Button>
+                    </Alert>
+                  )}
+                  {assigneeNotice && (
+                    <Alert title={m.drawer.assigneeUnavailableTitle} severity="warning">
+                      {assigneeNotice}
+                    </Alert>
+                  )}
+                  {assigneeCatalog && assigneeCatalog.revision === 0 && (
+                    <p className={styles.hint}>{m.drawer.assigneeNotPublished}</p>
+                  )}
+                  {assigneeCatalog && assigneeCatalog.revision > 0 && assigneeCatalog.members.length === 0 && (
+                    <p className={styles.hint}>{m.drawer.assigneeEmpty}</p>
+                  )}
+                  {assigneeCatalog && assigneeCatalog.revision > 0 && (
+                    <p className={styles.hint}>
+                      {m.drawer.assigneeSnapshot(
+                        formatDate(assigneeCatalog.updatedAt),
+                        assigneeCatalog.updatedBy || m.common.unknown
+                      )}
+                    </p>
+                  )}
+                  {assigneeLoading && !assigneeCatalog && <p className={styles.hint}>{m.drawer.assigneeLoading}</p>}
+                  <p className={styles.hint}>{m.participants.hint}</p>
                   <p className={styles.hint}>{m.drawer.ownerHint}</p>
                 </form>
               )}

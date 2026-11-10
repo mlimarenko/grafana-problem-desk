@@ -163,10 +163,29 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 	if cleanPath == "policy" || strings.HasPrefix(cleanPath, "policy/") {
 		bodyLimit = maxPolicyRequestBodyBytes
 	}
+	if cleanPath == "assignees" && req.Method == http.MethodPut {
+		bodyLimit = 4 * 1024 * 1024
+	}
 	if len(req.Body) > bodyLimit {
 		return sendJSON(sender, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("request body exceeds maximum limit of %dKiB", bodyLimit/1024)})
 	}
 
+	if cleanPath == "assignees" {
+		if role == "viewer" {
+			return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "editor role required"})
+		}
+		switch req.Method {
+		case http.MethodGet:
+			return a.handleGetAssignees(ctx, pc.OrgID, sender)
+		case http.MethodPut:
+			if role != "admin" {
+				return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "admin role required"})
+			}
+			return a.handlePutAssignees(ctx, pc.OrgID, actor, req, sender)
+		default:
+			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+	}
 	// 5. Organization policy routes
 	if cleanPath == "policy" {
 		switch req.Method {
@@ -438,12 +457,15 @@ func (a *App) handleAssign(ctx context.Context, orgID int64, problemID, actor st
 		return sendJSON(sender, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
 	}
 
+	if !validAssigneeJSONUnicode(req.Body) {
+		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "invalid json payload"})
+	}
 	var payload models.AssignRequest
 	if err := decodeJSONStrict(req.Body, &payload); err != nil {
 		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid json payload: %v", err)})
 	}
 
-	assignee := sanitizer.NormalizePlainText(payload.Assignee)
+	assignee := payload.Assignee
 	if len(assignee) > 255 {
 		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "assignee exceeds maximum 255 characters"})
 	}
@@ -451,6 +473,9 @@ func (a *App) handleAssign(ctx context.Context, orgID int64, problemID, actor st
 	problem, err := a.store.AssignProblem(ctx, orgID, problemID, actor, assignee)
 	if errors.Is(err, storage.ErrNotFound) {
 		return sendJSON(sender, http.StatusNotFound, map[string]string{"error": "problem not found"})
+	}
+	if errors.Is(err, storage.ErrAssigneeUnavailable) {
+		return sendJSON(sender, http.StatusUnprocessableEntity, map[string]string{"error": "assignee_unavailable"})
 	}
 	if err != nil {
 		return sendJSON(sender, http.StatusInternalServerError, map[string]string{"error": "failed to assign problem"})

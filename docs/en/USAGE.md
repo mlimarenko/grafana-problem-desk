@@ -70,7 +70,18 @@ escaped on export. The time-zone control switches between local time and UTC.
 2. Select the problem title. The inspector replaces the previous selection; unsent comment text is confirmed before it is discarded.
 3. Write in the comment field and add the comment.
 4. Select **Acknowledge** when the problem has been seen. **Remove acknowledgement** records a separate activity event.
-5. Set the **Owner label** to a login or team name. It is a collaboration label, not user provisioning or a permission grant.
+5. Choose an **Assignee** from the searchable participant list and save. Search by name or login; clear the selection to unassign. Assignment does not create a user or grant permissions.
+
+An organization administrator publishes the list with **Update participants**.
+This reads the current organization's users through the administrator's Grafana
+session, excludes disabled users and stores only their UID, login and name.
+Editors use that published snapshot without directory-reading privileges.
+The picker shows when it was updated. Ask an administrator to refresh it when
+membership changes or before the first assignment.
+
+Existing assignments remain visible even when their value is absent from the
+published list. They are not offered as new choices for other episodes. A failed
+refresh keeps the previous list; a removed choice cannot be newly assigned.
 6. Open the **Workflow** section to start the process selected by the organization policy, or to advance the pinned process. When a routing rule or default selects a process, that process is fixed and cannot be replaced from the drawer. The inspector lists the allowed next states, the minimum role and the acknowledgement, owner, comment or recovered-source requirements still unmet. Admin-only actions are disabled for Editors. A transition that requires a comment stores the comment with the transition. If another operator or a policy edit changed the case after the drawer loaded, the action is rejected as stale and the drawer refreshes instead of retrying silently.
 
 A recovered episode keeps its discussion and activity. A later occurrence of the same alert is a separate episode with its own discussion and acknowledgement. There are no bulk actions; change one episode at a time.

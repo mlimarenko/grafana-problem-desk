@@ -50,4 +50,11 @@ There is no server-side language setting. Each member switches the interface bet
 
 Viewers read the workspace and the active policy explanation. Editors and administrators comment, acknowledge, remove acknowledgement, set the owner label and start or advance an episode workflow when the policy allows it. Administrators also run manual source sync, change the source configuration and edit the organization policy. The plugin does not delete episodes, comments or activity records.
 
+Before participants can be newly assigned, an Admin publishes the assignee list
+with **Update participants** on the Problem Desk page. Repeat after organization
+membership changes. This uses the administrator's native Grafana session, not
+the alert source token. Editors can read the published list and assign from it;
+Viewers cannot read the directory or change assignments. See
+[assignee selection](USAGE.md) for refresh errors and existing assignments.
+
 See [installation](INSTALL.md) for the unsigned-plugin setting and [security](SECURITY.md) for operational precautions.

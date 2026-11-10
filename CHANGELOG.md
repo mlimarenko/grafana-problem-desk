@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Choose an assignee from a searchable organization participant list instead of typing a login.
+- Administrators explicitly refresh the published list from Grafana; Editors do not need user-directory privileges and the source token stays read-only.
+- Preserve existing assignments and history when a participant leaves the published list.
+
 ## 0.3.0
 
 - Organization policy: validated, revisioned levels, workflows, label routing and view defaults per Grafana organization, with optimistic revision checks and an immutable audit history.

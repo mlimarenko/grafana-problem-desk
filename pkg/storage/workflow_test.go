@@ -202,6 +202,9 @@ func TestWorkflowStartGatesDenyWithoutWrites(t *testing.T) {
 	if _, err := store.AcknowledgeProblem(ctx, 1, id, "editor", ""); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.PutAssignees(ctx, 1, "admin", 0, []models.AssigneeMember{{UID: "owner", Login: "owner"}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.AssignProblem(ctx, 1, id, "editor", "owner"); err != nil {
 		t.Fatal(err)
 	}

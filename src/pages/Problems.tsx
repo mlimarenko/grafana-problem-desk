@@ -21,6 +21,7 @@ import { errorText, I18nProvider, useI18n, type Language } from '../i18n';
 import { dateTimeLocalToISO, toDateTimeLocalValue } from '../i18n/format';
 import {
   errorStatus,
+  fetchAssignees,
   fetchDetail,
   fetchPolicy,
   fetchProblems,
@@ -30,7 +31,9 @@ import {
   postSync,
   postUnack,
   resolveProblem,
+  updateParticipants,
 } from '../api';
+import { ParticipantsError, assigneeOptions as buildAssigneeOptions, isAssigneeUnavailable, type AssigneeCatalog } from '../lib/assignees';
 import { toCSV, downloadCSV } from '../lib/csv';
 import { resolveDeepLink, type DeepLinkError } from '../lib/deeplink';
 import { correctedOffset, submitCommentDraft, validLabelFilter } from '../lib/workspace';
@@ -98,7 +101,9 @@ function Workspace() {
   } = useI18n();
   const role = config.bootData.user.orgRole;
   const canWrite = role === 'Editor' || role === 'Admin';
+  const canAdmin = role === 'Admin';
   const canSync = role === 'Admin';
+  const orgId = config.bootData.user.orgId;
 
   const [query, setQueryState] = useState<WorkspaceQuery>(() => parseQuery(window.location.search));
   const [policy, setPolicy] = useState<PolicyResponse>();
@@ -300,6 +305,7 @@ function Workspace() {
 
   useEffect(() => {
     setActionError(undefined);
+    setAssigneeNotice(undefined);
   }, [selectedId]);
 
   const [busyAction, setBusyAction] = useState<BusyAction>();
@@ -310,6 +316,45 @@ function Workspace() {
   const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>(() => Object.create(null));
   const draft = selectedId ? drafts[selectedId] ?? '' : '';
   const ownerDraft = selectedId ? ownerDrafts[selectedId] ?? detail?.problem.assignee ?? '' : '';
+
+  const [assigneeCatalog, setAssigneeCatalog] = useState<AssigneeCatalog>();
+  const [assigneeLoading, setAssigneeLoading] = useState(false);
+  const [assigneeError, setAssigneeError] = useState<ErrorKind>();
+  const [assigneeNotice, setAssigneeNotice] = useState<string>();
+  const [assigneeAttempt, setAssigneeAttempt] = useState(0);
+  const [participantsBusy, setParticipantsBusy] = useState(false);
+  const [participantsMessage, setParticipantsMessage] = useState<{ severity: 'success' | 'error'; text: string }>();
+
+  useEffect(() => {
+    if (!canWrite) {
+      setAssigneeCatalog(undefined);
+      setAssigneeError(undefined);
+      setAssigneeLoading(false);
+      return;
+    }
+    let active = true;
+    setAssigneeLoading(true);
+    setAssigneeError(undefined);
+    fetchAssignees()
+      .then((catalog) => {
+        if (active) {
+          setAssigneeCatalog(catalog);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setAssigneeError(classifyError(error));
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setAssigneeLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [canWrite, assigneeAttempt]);
 
   const [searchDraft, setSearchDraft] = useState(query.search);
   const [hostDraft, setHostDraft] = useState(query.host);
@@ -522,9 +567,19 @@ function Workspace() {
     if (!problemId) {
       return;
     }
-    const value = ownerDraft.trim();
+    const value = ownerDraft;
     void runAction('assign', problemId, async () => {
-      updateDetailProblem(await postAssign(problemId, value));
+      try {
+        updateDetailProblem(await postAssign(problemId, value));
+      } catch (error) {
+        if (isAssigneeUnavailable(error)) {
+          setAssigneeNotice(m.drawer.assigneeUnavailable);
+          setAssigneeAttempt((attempt) => attempt + 1);
+          return;
+        }
+        throw error;
+      }
+      setAssigneeNotice(undefined);
       setOwnerDrafts((previous) => {
         if (previous[problemId] !== undefined && previous[problemId] !== value) {
           return previous;
@@ -534,6 +589,31 @@ function Workspace() {
         return next;
       });
     });
+  }
+
+  async function publishParticipants() {
+    if (!assigneeCatalog || participantsBusy) {
+      return;
+    }
+    setParticipantsBusy(true);
+    setParticipantsMessage(undefined);
+    try {
+      const catalog = await updateParticipants(orgId, assigneeCatalog.revision);
+      setAssigneeCatalog(catalog);
+      setAssigneeError(undefined);
+      setParticipantsMessage({ severity: 'success', text: m.participants.updated(catalog.members.length) });
+    } catch (error) {
+      if (error instanceof ParticipantsError) {
+        if (error.reason === 'conflict') {
+          setAssigneeAttempt((attempt) => attempt + 1);
+        }
+        setParticipantsMessage({ severity: 'error', text: m.participants.errors[error.reason] });
+      } else {
+        setParticipantsMessage({ severity: 'error', text: errorText(classifyError(error), m) });
+      }
+    } finally {
+      setParticipantsBusy(false);
+    }
   }
 
   function addComment() {
@@ -764,6 +844,7 @@ function Workspace() {
     labelOptions.unshift({ label: query.labelKey, value: query.labelKey });
   }
   const empty = listing && listing.total === 0 && !listLoading;
+  const drawerAssigneeOptions = buildAssigneeOptions(assigneeCatalog?.members ?? [], ownerDraft, m.drawer.assigneeLegacy);
 
   return (
     <main className={styles.page}>
@@ -810,12 +891,30 @@ function Workspace() {
               {syncing ? m.app.syncing : m.app.syncSource}
             </Button>
           )}
+          {canAdmin && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="users-alt"
+              title={m.participants.hint}
+              disabled={participantsBusy || assigneeLoading || !assigneeCatalog}
+              onClick={() => void publishParticipants()}
+            >
+              {participantsBusy ? m.participants.updating : m.participants.update}
+            </Button>
+          )}
           <a className={styles.configLink} href={`${config.appSubUrl}/plugins/${pluginId}?page=configuration`}>
             <Icon name="cog" size="sm" />
             {m.app.configuration}
           </a>
         </div>
       </header>
+
+      {participantsMessage && (
+        <Alert className={styles.notice} severity={participantsMessage.severity} title={m.participants.title}>
+          {participantsMessage.text}
+        </Alert>
+      )}
 
       <TabsBar className={styles.tabs} aria-label={m.tabs.label}>
         <Tab
@@ -1176,6 +1275,11 @@ function Workspace() {
         busyAction={busyAction}
         draft={draft}
         ownerDraft={ownerDraft}
+        assigneeOptions={drawerAssigneeOptions}
+        assigneeCatalog={assigneeCatalog}
+        assigneeLoading={assigneeLoading}
+        assigneeError={assigneeError}
+        assigneeNotice={assigneeNotice}
         canWrite={canWrite}
         levels={listing?.levels ?? policy?.doc.levels ?? []}
         severityKey={listing?.severityKey ?? policy?.doc.severityKey ?? ''}
@@ -1185,6 +1289,7 @@ function Workspace() {
         onOwnerDraftChange={setOwnerDraft}
         onClose={closeDrawer}
         onRetry={() => setDetailAttempt((value) => value + 1)}
+        onRetryAssignees={() => setAssigneeAttempt((value) => value + 1)}
         onAck={acknowledge}
         onUnack={unacknowledge}
         onAssign={assignOwner}
@@ -1319,6 +1424,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
     flex-wrap: wrap;
     flex: 0 1 auto;
+  `,
+  notice: css`
+    margin-top: ${theme.spacing(1)};
   `,
   configLink: css`
     display: inline-flex;

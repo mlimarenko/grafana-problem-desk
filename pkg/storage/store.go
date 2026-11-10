@@ -18,7 +18,7 @@ import (
 )
 
 // supportedSchemaVersion is the newest additive schema this build understands.
-const supportedSchemaVersion = 1
+const supportedSchemaVersion = 2
 
 var (
 	// ErrNotFound is returned when an episode is not found for the requested org_id.
@@ -216,28 +216,33 @@ func (s *Store) migrate() error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, baseSchema); err != nil {
-		return fmt.Errorf("failed to create base schema: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, policySchema); err != nil {
-		return fmt.Errorf("failed to create policy schema: %w", err)
-	}
-	columns := []struct{ table, name, definition string }{
-		{"problems", "level_id", "level_id TEXT NOT NULL DEFAULT ''"},
-		{"problems", "workflow_id", "workflow_id TEXT NULL"},
-		{"problems", "state_id", "state_id TEXT NULL"},
-		{"events", "policy_revision", "policy_revision INTEGER NULL"},
-	}
-	for _, column := range columns {
-		if err := ensureColumn(ctx, tx, column.table, column.name, column.definition); err != nil {
-			return err
+	if version == 0 {
+		if _, err := tx.ExecContext(ctx, baseSchema); err != nil {
+			return fmt.Errorf("failed to create base schema: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, policySchema); err != nil {
+			return fmt.Errorf("failed to create policy schema: %w", err)
+		}
+		columns := []struct{ table, name, definition string }{
+			{"problems", "level_id", "level_id TEXT NOT NULL DEFAULT ''"},
+			{"problems", "workflow_id", "workflow_id TEXT NULL"},
+			{"problems", "state_id", "state_id TEXT NULL"},
+			{"events", "policy_revision", "policy_revision INTEGER NULL"},
+		}
+		for _, column := range columns {
+			if err := ensureColumn(ctx, tx, column.table, column.name, column.definition); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, backfillLevelSQL); err != nil {
+			return fmt.Errorf("failed to backfill level ids: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_problems_org_level ON problems(org_id, level_id)"); err != nil {
+			return fmt.Errorf("failed to index level ids: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, backfillLevelSQL); err != nil {
-		return fmt.Errorf("failed to backfill level ids: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_problems_org_level ON problems(org_id, level_id)"); err != nil {
-		return fmt.Errorf("failed to index level ids: %w", err)
+	if _, err := tx.ExecContext(ctx, assigneeSchema); err != nil {
+		return fmt.Errorf("failed to create assignee catalog: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", supportedSchemaVersion)); err != nil {
 		return fmt.Errorf("failed to record schema version: %w", err)
@@ -524,6 +529,24 @@ func (s *Store) AssignProblem(ctx context.Context, orgID int64, problemID, autho
 		return nil, fmt.Errorf("failed to begin assignment: %w", err)
 	}
 	defer tx.Rollback()
+	var current string
+	if err := tx.QueryRowContext(ctx, `SELECT assignee FROM problems WHERE org_id = ? AND id = ?`, orgID, problemID).Scan(&current); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	if current == assignee {
+		p.Assignee = current
+		return p, nil
+	}
+	if assignee != "" {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM assignee_members WHERE org_id = ? AND login = ?)`, orgID, assignee).Scan(&exists); err != nil {
+			return nil, err
+		} else if exists == 0 {
+			return nil, ErrAssigneeUnavailable
+		}
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	updateSQL := `

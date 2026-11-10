@@ -54,6 +54,9 @@ func TestStorePersistenceAfterReopen(t *testing.T) {
 	if _, err := store1.AcknowledgeProblem(ctx, orgID, probID, "admin", "acknowledged disk issue"); err != nil {
 		t.Fatalf("failed to ack problem: %v", err)
 	}
+	if _, err := store1.PutAssignees(ctx, orgID, "admin", 0, []models.AssigneeMember{{UID: "alice", Login: "alice"}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store1.AssignProblem(ctx, orgID, probID, "admin", "alice"); err != nil {
 		t.Fatalf("failed to assign problem: %v", err)
 	}

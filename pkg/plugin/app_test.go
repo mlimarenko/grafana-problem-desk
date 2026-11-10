@@ -316,6 +316,9 @@ func TestEditorMutationsAndAdminSync(t *testing.T) {
 	}
 
 	// Editor can ASSIGN
+	if resp := call(app, http.MethodPut, "assignees", orgID, admin, []byte(`{"orgId":1,"baseRevision":0,"members":[{"uid":"u","login":"dev-oncall","name":""}]}`), jsonHeaders); resp.Status != http.StatusOK {
+		t.Fatalf("publish: %d", resp.Status)
+	}
 	respAssign := call(app, http.MethodPost, "problems/"+probID+"/assign", orgID, editor, []byte(`{"assignee":"dev-oncall"}`), jsonHeaders)
 	if respAssign.Status != http.StatusOK {
 		t.Fatalf("expected 200 OK on ASSIGN by editor, got %d", respAssign.Status)
