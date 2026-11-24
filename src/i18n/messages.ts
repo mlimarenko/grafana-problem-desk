@@ -128,14 +128,15 @@ export interface Messages {
     stateAll: string;
     stateActive: string;
     stateRecovered: string;
-    sort: string;
-    sortSeverity: string;
-    sortStarted: string;
-    sortDuration: string;
+    more: string;
+    column: (name: string, active?: boolean) => string;
+    titleContains: string;
+    durationFrom: string;
+    durationTo: string;
+    invalidDuration: string;
+    textTooLong: string;
     sortRecovered: string;
-    order: string;
-    orderAsc: string;
-    orderDesc: string;
+    noMatches: string;
     labels: string;
     labelKey: string;
     labelKeyPlaceholder: string;
@@ -434,14 +435,15 @@ const en: Messages = {
     stateAll: 'Active and recovered',
     stateActive: 'Active',
     stateRecovered: 'Recovered',
-    sort: 'Sort',
-    sortSeverity: 'Severity',
-    sortStarted: 'Started',
-    sortDuration: 'Duration',
-    sortRecovered: 'Recovered',
-    order: 'Order',
-    orderAsc: 'Ascending',
-    orderDesc: 'Descending',
+    more: 'More filters',
+    column: (name, active) => `Filter by ${name}${active ? ' (active)' : ''}`,
+    titleContains: 'Title contains',
+    durationFrom: 'At least (min)',
+    durationTo: 'At most (min)',
+    invalidDuration: 'Use nonnegative durations. The minimum must not exceed the maximum.',
+    textTooLong: 'The filter value is too long.',
+    sortRecovered: 'Sort by recovery time',
+    noMatches: 'No episodes match the filters',
     labels: 'Labels',
     labelKey: 'Label',
     labelKeyPlaceholder: 'Select label',
@@ -744,14 +746,15 @@ const ru: Messages = {
     stateAll: 'Активные и восстановленные',
     stateActive: 'Активные',
     stateRecovered: 'Восстановленные',
-    sort: 'Сортировка',
-    sortSeverity: 'Важность',
-    sortStarted: 'Начало',
-    sortDuration: 'Длительность',
-    sortRecovered: 'Восстановление',
-    order: 'Порядок',
-    orderAsc: 'По возрастанию',
-    orderDesc: 'По убыванию',
+    more: 'Доп. фильтры',
+    column: (name, active) => `Фильтр: ${name}${active ? ' (применен)' : ''}`,
+    titleContains: 'Название содержит',
+    durationFrom: 'От (мин)',
+    durationTo: 'До (мин)',
+    invalidDuration: 'Укажите неотрицательные значения. Минимум не должен превышать максимум.',
+    textTooLong: 'Сократите значение фильтра.',
+    sortRecovered: 'Сортировать по времени восстановления',
+    noMatches: 'Нет эпизодов по выбранным фильтрам',
     labels: 'Метки',
     labelKey: 'Метка',
     labelKeyPlaceholder: 'Выберите метку',

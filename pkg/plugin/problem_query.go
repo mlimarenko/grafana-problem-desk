@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mlimarenko/grafana-problem-desk/pkg/storage"
 )
@@ -42,12 +44,46 @@ func parseProblemQuery(values url.Values, now time.Time) (storage.ProblemQuery, 
 		}
 		return false
 	}
-	if !enum("view", &q.View, "problems", "recent", "history") || !enum("state", &q.State, "all", "active", "recovered") || !enum("assignment", &q.Assignment, "all", "assigned", "unassigned") || !enum("ack", &q.Ack, "all", "acknowledged", "unacknowledged") || !enum("sort", &q.Sort, "severity", "started", "duration", "recovered") || !enum("order", &q.Order, "asc", "desc") {
+	if !enum("view", &q.View, "problems", "recent", "history") || !enum("state", &q.State, "all", "active", "recovered") || !enum("assignment", &q.Assignment, "all", "assigned", "unassigned") || !enum("ack", &q.Ack, "all", "acknowledged", "unacknowledged") || !enum("sort", &q.Sort, "severity", "started", "duration", "recovered", "name", "status", "assignee", "ack") || !enum("order", &q.Order, "asc", "desc") {
 		return q, invalid
 	}
 	q.Severity, q.WorkState, q.Workflow = values.Get("severity"), values.Get("workState"), values.Get("workflow")
 	q.Host, q.Assignee, q.Search = values.Get("host"), values.Get("assignee"), values.Get("search")
 	q.LabelKey, q.LabelValue = values.Get("labelKey"), values.Get("labelValue")
+	q.Title = strings.TrimSpace(values.Get("title"))
+	if len(values.Get("title")) > 512 || !utf8.ValidString(values.Get("title")) {
+		return q, invalid
+	}
+	for _, bound := range []struct {
+		key string
+		dst **time.Time
+	}{{"startedFrom", &q.StartedFrom}, {"startedTo", &q.StartedTo}} {
+		if v, ok := values[bound.key]; ok {
+			t, err := parseProblemInstant(v[0])
+			if err != nil {
+				return q, invalid
+			}
+			*bound.dst = &t
+		}
+	}
+	if q.StartedFrom != nil && q.StartedTo != nil && q.StartedFrom.After(*q.StartedTo) {
+		return q, invalid
+	}
+	for _, bound := range []struct {
+		key string
+		dst **int64
+	}{{"minDuration", &q.MinDuration}, {"maxDuration", &q.MaxDuration}} {
+		if v, ok := values[bound.key]; ok {
+			n, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil || n < 0 {
+				return q, invalid
+			}
+			*bound.dst = &n
+		}
+	}
+	if q.MinDuration != nil && q.MaxDuration != nil && *q.MinDuration > *q.MaxDuration {
+		return q, invalid
+	}
 	_, hasKey := values["labelKey"]
 	_, hasValue := values["labelValue"]
 	if hasKey != hasValue || (hasKey && q.LabelKey == "") || len(q.Severity) > 256 || len(q.WorkState) > 256 || len(q.Workflow) > 256 || len(q.Host) > 256 || len(q.Assignee) > 256 || len(q.LabelKey) > 256 || len(q.LabelValue) > 1024 {

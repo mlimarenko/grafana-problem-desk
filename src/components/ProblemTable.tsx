@@ -8,42 +8,62 @@ import {
   problemTitle,
   levelDisplay,
   levelColor,
+  problemColumns,
   targetMetadata,
   targetName,
   type Problem,
-  type Level,
   type LevelTone,
   type PolicyColumn,
 } from '../model';
 import { useI18n } from '../i18n';
+import { sortByColumn } from '../lib/query';
+import { columnLabels, ProblemColumnFilter, type ColumnFilterProps } from './ProblemColumnFilter';
 
-interface Props {
+interface Props extends ColumnFilterProps {
   problems: Problem[];
   selectedId: string;
   now: number;
-  levels: Level[];
   severityKey: string;
-  columns: PolicyColumn[];
+  columns: readonly PolicyColumn[];
   onOpen: (problem: Problem) => void;
 }
 
-export function ProblemTable({ problems, selectedId, now, levels, severityKey, columns, onOpen }: Props) {
+const columnWidths: Record<PolicyColumn, number> = {
+  level: 132, name: 190, status: 125, started: 139, duration: 148, owner: 157, ack: 159,
+};
+
+export function ProblemTable({ problems, selectedId, now, severityKey, columns, onOpen, ...filters }: Props) {
   const styles = useStyles2(getStyles);
   const { messages: m, language, formatDate, formatDuration, formatRelative } = useI18n();
+  const { levels, onSort, query } = filters;
+  const labels = columnLabels(m);
+  const visibleColumns = problemColumns.filter((column) => columns.includes(column));
 
   return (
-    <div className={styles.wrap}>
-      <table className={styles.table}>
+    <div className={styles.wrap} role="region" aria-label={m.table.caption} tabIndex={0}>
+      <table className={styles.table} style={{ minWidth: visibleColumns.reduce((width, column) => width + columnWidths[column], 0) }}>
         <caption className={styles.srOnly}>{m.table.caption}</caption>
+        <colgroup>
+          {visibleColumns.map((column) => <col key={column} style={column === 'name' ? undefined : { width: columnWidths[column] }} />)}
+        </colgroup>
         <thead>
           <tr>
-            {columns.includes('level') && <th scope="col">{m.table.severity}</th>}
-            {columns.includes('name') && <th scope="col">{m.table.problem}</th>}
-            {columns.includes('status') && <th scope="col">{m.table.status}</th>}
-            {columns.includes('started') && <th scope="col">{m.table.started}</th>}
-            {columns.includes('duration') && <th scope="col">{m.table.duration}</th>}
-            {columns.includes('owner') && <th scope="col">{m.table.owner}</th>}
-            {columns.includes('ack') && <th scope="col">{m.table.ack}</th>}
+            {visibleColumns.map((column) => {
+              const sort = sortByColumn[column];
+              const sorted = query.sort === sort || (column === 'status' && query.sort === 'recovered');
+              return (
+                <th key={column} scope="col" data-column={column}
+                  aria-sort={sorted ? (query.order === 'asc' ? 'ascending' : 'descending') : undefined}>
+                  <div className={styles.head}>
+                    <button type="button" className={styles.sort} title={labels[column]} onClick={() => onSort(sort)}>
+                      <span>{labels[column]}</span>
+                      {sorted && <Icon name={query.order === 'asc' ? 'arrow-up' : 'arrow-down'} size="sm" />}
+                    </button>
+                    <ProblemColumnFilter column={column} {...filters} />
+                  </div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -87,7 +107,7 @@ export function ProblemTable({ problems, selectedId, now, levels, severityKey, c
                     {severity.label}
                   </span>
                 </td>}
-                {columns.includes('name') && <td className={styles.problemCell}>
+                {columns.includes('name') && <td>
                   <button
                     type="button"
                     className={styles.titleButton}
@@ -100,10 +120,12 @@ export function ProblemTable({ problems, selectedId, now, levels, severityKey, c
                   >
                     {title}
                   </button>
-                  <div className={styles.metaLine}>
-                    {problem.labels.alertname && problem.labels.alertname !== title && <span>{problem.labels.alertname}</span>}
-                    {problem.labels.service && <span>{problem.labels.service}</span>}
-                  </div>
+                  {((problem.labels.alertname && problem.labels.alertname !== title) || problem.labels.service) && (
+                    <div className={styles.metaLine}>
+                      {problem.labels.alertname && problem.labels.alertname !== title && <span>{problem.labels.alertname}</span>}
+                      {problem.labels.service && <span>{problem.labels.service}</span>}
+                    </div>
+                  )}
                   <div className={styles.targetLine}>
                     <Icon name="monitor" size="sm" />
                     <span>{target || m.table.noTarget}</span>
@@ -155,14 +177,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
   wrap: css`
     min-width: 0;
     overflow-x: auto;
+    overscroll-behavior-inline: contain;
   `,
   table: css`
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     th,
     td {
-      padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
+      padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
       border-bottom: 1px solid ${theme.colors.border.weak};
       text-align: left;
       vertical-align: top;
@@ -171,30 +195,46 @@ const getStyles = (theme: GrafanaTheme2) => ({
       position: sticky;
       top: 0;
       z-index: 1;
-      background: ${theme.colors.background.primary};
-      border-bottom: 1px solid ${theme.colors.border.medium};
+      padding-inline: ${theme.spacing(0.75)};
+      background: ${theme.colors.background.secondary};
+      border: 1px solid ${theme.colors.border.weak};
+      border-top: 0;
       color: ${theme.colors.text.secondary};
+      font-size: 0.93em;
       font-weight: ${theme.typography.fontWeightMedium};
       white-space: nowrap;
-    }
-    th:nth-child(1) {
-      width: 112px;
-    }
-    th:nth-child(3),
-    th:nth-child(5) {
-      width: 118px;
-    }
-    th:nth-child(4) {
-      width: 158px;
-    }
-    th:nth-child(6) {
-      width: 150px;
-    }
-    th:nth-child(7) {
-      width: 188px;
+      &:first-child { border-left: 0; }
+      &:last-child { border-right: 0; }
     }
     tbody tr:last-child td {
       border-bottom: 0;
+    }
+  `,
+  head: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: ${theme.spacing(3)};
+    gap: ${theme.spacing(0.5)};
+  `,
+  sort: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+    min-width: 0;
+    min-height: ${theme.spacing(3)};
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+    > svg { flex-shrink: 0; }
+    &:hover { color: ${theme.colors.text.primary}; }
+    &:focus-visible {
+      outline: 2px solid ${theme.colors.primary.border};
+      outline-offset: 1px;
     }
   `,
   row: css`
@@ -218,9 +258,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
       outline: 2px solid ${theme.colors.primary.border};
       outline-offset: -2px;
     }
-  `,
-  problemCell: css`
-    min-width: 260px;
   `,
   titleButton: css`
     display: block;
@@ -261,7 +298,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     overflow-wrap: anywhere;
   `,
   metadata: css`
-    color: ${theme.colors.text.disabled};
+    color: ${theme.colors.text.secondary};
   `,
   secondary: css`
     color: ${theme.colors.text.secondary};
@@ -270,7 +307,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
   `,
   started: css`
-    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   `,
   duration: css`
     white-space: nowrap;
@@ -282,9 +319,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(0.5)};
     padding: 2px ${theme.spacing(1)};
     border: 1px solid ${levelColor(theme, tone)};
-    border-radius: 999px;
+    border-radius: ${theme.shape.radius.default};
     color: ${levelColor(theme, tone)};
-    white-space: nowrap;
+    font-size: ${theme.typography.bodySmall.fontSize};
+    overflow-wrap: anywhere;
     font-weight: ${theme.typography.fontWeightMedium};
   `,
   statusBadge: (status: Problem['status']) => css`

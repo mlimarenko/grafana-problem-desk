@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   activeFilterCount,
   buildProblemsRequest,
+  clearColumnFilter,
   closeProblem,
+  columnFilterActive,
   defaultLimit,
   defaultOrder,
   defaultSort,
@@ -14,6 +16,8 @@ import {
   resetFilters,
   selectProblem,
   serializeQuery,
+  sortByColumn,
+  toggleSort,
   validateCustomRange,
   withView,
 } from './query';
@@ -38,6 +42,46 @@ describe('workspace query', () => {
     );
     const restored = parseQuery(`?${serializeQuery(query)}`);
     expect(restored).toEqual(query);
+  });
+
+  it('preserves column filters and zero bounds through the URL and request', () => {
+    const state = parseQuery('?view=history&title=Печать&host=host-a&startedFrom=2026-11-10T12:00:00Z&minDuration=0&maxDuration=600&offset=25');
+    expect(parseQuery(queryString(state))).toEqual(state);
+    expect(buildProblemsRequest(state, new Date('2026-11-10T13:00:00Z'))).toMatchObject({
+      title: 'Печать', host: 'host-a', startedFrom: '2026-11-10T12:00:00Z', minDuration: '0', maxDuration: '600',
+    });
+    expect(activeFilterCount(state)).toBe(3);
+    expect(columnFilterActive('name', { ...state, ...clearColumnFilter('name') })).toBe(false);
+    const reset = resetFilters(state);
+    expect(activeFilterCount(reset)).toBe(0);
+    expect(buildProblemsRequest(reset, new Date())).not.toHaveProperty('minDuration');
+    expect(mergedQueryString('?minDuration=0&startedFrom=abc&other=1', reset)).toBe('other=1&view=history');
+  });
+
+  it('sorts every visible column through the server query and returns to page one', () => {
+    const state = parseQuery('?severity=critical&offset=50');
+    for (const sort of Object.values(sortByColumn)) {
+      const ordered = toggleSort(state, sort);
+      expect(ordered).toMatchObject({ sort, offset: 0, severity: 'critical' });
+      expect(buildProblemsRequest(parseQuery(queryString(ordered)), new Date())).toMatchObject({ sort, order: ordered.order });
+      expect(toggleSort(ordered, sort).order).not.toBe(ordered.order);
+    }
+    expect(toggleSort(state, 'name').order).toBe('asc');
+    expect(toggleSort(state, 'started').order).toBe('desc');
+  });
+
+  it('drops malformed or reversed column bounds without dropping other filters', () => {
+    const query = parseQuery('?severity=critical&startedFrom=bad&startedTo=2026-11-10T09:30:00Z&minDuration=1.5&maxDuration=0');
+    expect(buildProblemsRequest(query, new Date())).toMatchObject({
+      severity: 'critical', startedTo: '2026-11-10T09:30:00Z', maxDuration: '0',
+    });
+    expect(query.startedFrom).toBe('');
+    expect(query.minDuration).toBe('');
+    const reversed = parseQuery('?startedFrom=2026-11-11T12:00:00Z&startedTo=2026-11-10T12:00:00Z&minDuration=5&maxDuration=2');
+    expect(activeFilterCount(reversed)).toBe(0);
+    expect(serializeQuery(reversed).size).toBe(0);
+    expect(parseQuery('?startedTo=2026-02-30T12:00:00Z').startedTo).toBe('');
+    expect(parseQuery('?startedFrom=2026-11-10T12:00:00.000000002Z&startedTo=2026-11-10T12:00:00.000000001Z').startedFrom).toBe('');
   });
 
   it('keeps source and operator filters separate in URLs and requests', () => {

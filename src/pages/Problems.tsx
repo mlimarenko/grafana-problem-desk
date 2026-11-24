@@ -1,13 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import type { GrafanaTheme2, SelectableValue } from '@grafana/data';
-import { config, locationService } from '@grafana/runtime';
+import { config, locationService, PluginPage } from '@grafana/runtime';
 import {
   Alert,
   Button,
   Field,
   Icon,
   Input,
+  LinkButton,
+  Pagination,
   RadioButtonGroup,
   Select,
   Spinner,
@@ -16,6 +18,7 @@ import {
   useStyles2,
 } from '@grafana/ui';
 import { DetailDrawer, type BusyAction } from '../components/DetailDrawer';
+import { ProblemColumnFilter, type ColumnFilterProps } from '../components/ProblemColumnFilter';
 import { ProblemTable } from '../components/ProblemTable';
 import { errorText, I18nProvider, useI18n, type Language } from '../i18n';
 import { dateTimeLocalToISO, toDateTimeLocalValue } from '../i18n/format';
@@ -50,15 +53,16 @@ import {
   resetFilters,
   selectProblem,
   validateCustomRange,
+  toggleSort,
   withView,
   type RangePreset,
-  type SortKey,
   type View,
   type WorkspaceQuery,
 } from '../lib/query';
 import {
   classifyError,
   elapsedMs,
+  problemColumns,
   problemTitle,
   levelDisplay,
   compareLevels,
@@ -168,40 +172,13 @@ function Workspace() {
   const [lastLoadedAt, setLastLoadedAt] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const lastListKey = useRef('');
-  const listKey = useMemo(() => JSON.stringify(buildListSignature(query)), [query]);
-
-  function buildListSignature(value: WorkspaceQuery): Record<string, string | number> {
-    const copy = { ...value };
-    return {
-      view: copy.view,
-      range: copy.range,
-      from: copy.from,
-      to: copy.to,
-      state: copy.state,
-      severity: copy.severity,
-      workflow: copy.workflow,
-      workState: copy.workState,
-      host: copy.host,
-      assignee: copy.assignee,
-      assignment: copy.assignment,
-      ack: copy.ack,
-      search: copy.search,
-      labelKey: copy.labelKey,
-      labelValue: copy.labelValue,
-      labelKeyPresent: Number(copy.labelKeyPresent),
-      labelValuePresent: Number(copy.labelValuePresent),
-      sort: copy.sort,
-      order: copy.order,
-      limit: copy.limit,
-      offset: copy.offset,
-    };
-  }
+  const listKey = listQueryKey(query);
 
   useEffect(() => {
     if (!policy) return;
     let active = true;
     const requestedQuery = queryRef.current;
-    const isCurrent = () => active && JSON.stringify(buildListSignature(queryRef.current)) === listKey;
+    const isCurrent = () => active && listQueryKey(queryRef.current) === listKey;
     const changed = lastListKey.current !== listKey;
     lastListKey.current = listKey;
     if (changed) {
@@ -357,8 +334,7 @@ function Workspace() {
   }, [canWrite, assigneeAttempt]);
 
   const [searchDraft, setSearchDraft] = useState(query.search);
-  const [hostDraft, setHostDraft] = useState(query.host);
-  const [assigneeDraft, setAssigneeDraft] = useState(query.assignee);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [labelKeyDraft, setLabelKeyDraft] = useState(query.labelKey);
   const [labelValueDraft, setLabelValueDraft] = useState(query.labelValue);
   const [customOpen, setCustomOpen] = useState(query.range === 'custom');
@@ -369,11 +345,9 @@ function Workspace() {
 
   useEffect(() => {
     setSearchDraft(query.search);
-    setHostDraft(query.host);
-    setAssigneeDraft(query.assignee);
     setLabelKeyDraft(query.labelKey);
     setLabelValueDraft(query.labelValue);
-  }, [query.search, query.host, query.assignee, query.labelKey, query.labelValue]);
+  }, [query.search, query.labelKey, query.labelValue]);
 
   useEffect(() => {
     setCustomOpen(query.range === 'custom');
@@ -641,7 +615,7 @@ function Workspace() {
     }
   }
 
-  function applyFilters(event: React.FormEvent) {
+  function applyLabels(event: React.FormEvent) {
     event.preventDefault();
     const key = labelKeyDraft;
     const value = labelValueDraft;
@@ -654,9 +628,6 @@ function Workspace() {
     setFilterError('');
     navigate({
       ...queryRef.current,
-      search: searchDraft.trim(),
-      host: hostDraft.trim(),
-      assignee: assigneeDraft.trim(),
       labelKey: key,
       labelValue: value,
       labelKeyPresent: key !== '',
@@ -668,8 +639,6 @@ function Workspace() {
   function resetAllFilters() {
     setFilterError('');
     setSearchDraft('');
-    setHostDraft('');
-    setAssigneeDraft('');
     setLabelKeyDraft('');
     setLabelValueDraft('');
     navigate(resetFilters(queryRef.current));
@@ -779,7 +748,8 @@ function Workspace() {
   const windowRange = rangeWindow(query, new Date(lastLoadedAt || Date.now()));
   const windowLabel = windowRange
     ? m.range.window(formatDate(windowRange.from.toISOString()), formatDate(windowRange.to.toISOString()))
-    : '';  const activeFilters = activeFilterCount(query);
+    : '';
+  const activeFilters = activeFilterCount(query);
   const rangeOptions: Array<SelectableValue<RangePreset>> = [
     { label: m.range.oneHour, value: '1h' },
     { label: m.range.twentyFourHours, value: '24h' },
@@ -787,13 +757,6 @@ function Workspace() {
     { label: m.range.thirtyDays, value: '30d' },
     { label: m.range.custom, value: 'custom' },
   ];
-  const severityOptions: Array<SelectableValue<string>> = [
-    { label: m.filters.severityAll, value: '' },
-    ...(listing?.levels ?? []).slice().sort(compareLevels).map((level) => ({ label: level.name[language], value: level.id })),
-  ];
-  if (query.severity && !severityOptions.some((option) => option.value === query.severity)) {
-    severityOptions.push({ label: m.summary.retired(query.severity), value: query.severity });
-  }
   const workflowOptions: Array<SelectableValue<string>> = [
     { label: m.filters.workflowAll, value: '' },
     ...(policy?.doc.workflows ?? []).map((workflow) => ({ label: workflow.name[language], value: workflow.id })),
@@ -807,38 +770,11 @@ function Workspace() {
   }
   const workStateOptions: Array<SelectableValue<string>> = [{ label: m.filters.workStateAll, value: '' }, ...Array.from(states, ([value, label]) => ({ value, label }))];
   if (query.workState && !states.has(query.workState)) workStateOptions.push({ label: m.summary.retired(query.workState), value: query.workState });
-  const assignmentOptions: Array<SelectableValue<WorkspaceQuery['assignment']>> = [
-    { label: m.filters.assignmentAll, value: 'all' },
-    { label: m.filters.assigned, value: 'assigned' },
-    { label: m.filters.unassigned, value: 'unassigned' },
-  ];
-  const ackOptions: Array<SelectableValue<WorkspaceQuery['ack']>> = [
-    { label: m.filters.ackAll, value: 'all' },
-    { label: m.filters.acknowledged, value: 'acknowledged' },
-    { label: m.filters.unacknowledged, value: 'unacknowledged' },
-  ];
-  const stateOptions: Array<SelectableValue<WorkspaceQuery['state']>> = [
-    { label: m.filters.stateAll, value: 'all' },
-    { label: m.filters.stateActive, value: 'active' },
-    { label: m.filters.stateRecovered, value: 'recovered' },
-  ];
-  const sortOptions: Array<SelectableValue<SortKey>> = [
-    { label: m.filters.sortSeverity, value: 'severity' },
-    { label: m.filters.sortStarted, value: 'started' },
-    { label: m.filters.sortDuration, value: 'duration' },
-    { label: m.filters.sortRecovered, value: 'recovered' },
-  ];
-  const orderOptions: Array<SelectableValue<WorkspaceQuery['order']>> = [
-    { label: m.filters.orderDesc, value: 'desc' },
-    { label: m.filters.orderAsc, value: 'asc' },
-  ];
   const pageSizeOptions: Array<SelectableValue<WorkspaceQuery['limit']>> = [
     { label: '25', value: 25 },
     { label: '50', value: 50 },
     { label: '100', value: 100 },
   ];
-  const hostOptions = (listing?.facets.hosts ?? []).map((value) => ({ label: value, value }));
-  const assigneeOptions = (listing?.facets.assignees ?? []).map((value) => ({ label: value, value }));
   const labelOptions = (listing?.facets.labelKeys ?? []).map((value) => ({ label: value, value }));
   if (query.labelKey && !labelOptions.some((option) => option.value === query.labelKey)) {
     labelOptions.unshift({ label: query.labelKey, value: query.labelKey });
@@ -846,17 +782,16 @@ function Workspace() {
   const empty = listing && listing.total === 0 && !listLoading;
   const drawerAssigneeOptions = buildAssigneeOptions(assigneeCatalog?.members ?? [], ownerDraft, m.drawer.assigneeLegacy);
 
-  return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <div className={styles.heading}>
-          <div className={styles.titleRow}>
-            <Icon name="bell" size="lg" />
-            <h1 className={styles.h1}>{m.app.title}</h1>
-          </div>
-          <p className={styles.subtitle}>{m.app.subtitle}</p>
-        </div>
-        <div className={styles.headerActions}>
+  const columns = policy?.doc.views.columns ?? problemColumns;
+  const columnFilters: ColumnFilterProps = {
+    query,
+    levels: listing?.levels ?? policy?.doc.levels ?? [],
+    facets: listing?.facets,
+    onFilter: applySingleFilter,
+    onSort: (key) => navigate(toggleSort(queryRef.current, key)),
+  };
+  const headerActions = (
+    <div className={styles.headerActions}>
           <Select
             aria-label={m.app.language}
             width={13}
@@ -869,7 +804,6 @@ function Workspace() {
           />
           <Button
             variant="secondary"
-            size="sm"
             icon="clock-nine"
             title={m.app.timeZone}
             aria-label={`${m.app.timeZone}: ${zoneLabel}`}
@@ -879,7 +813,6 @@ function Workspace() {
           </Button>
           <Button
             variant="secondary"
-            size="sm"
             icon="sync"
             disabled={refreshing}
             onClick={() => setRefreshToken((value) => value + 1)}
@@ -887,14 +820,13 @@ function Workspace() {
             {refreshing ? m.common.refreshing : m.app.refresh}
           </Button>
           {canSync && (
-            <Button variant="secondary" size="sm" icon="cloud-upload" disabled={syncing} onClick={() => void sync()}>
+            <Button variant="secondary" icon="cloud-upload" disabled={syncing} onClick={() => void sync()}>
               {syncing ? m.app.syncing : m.app.syncSource}
             </Button>
           )}
           {canAdmin && (
             <Button
               variant="secondary"
-              size="sm"
               icon="users-alt"
               title={m.participants.hint}
               disabled={participantsBusy || assigneeLoading || !assigneeCatalog}
@@ -903,12 +835,15 @@ function Workspace() {
               {participantsBusy ? m.participants.updating : m.participants.update}
             </Button>
           )}
-          <a className={styles.configLink} href={`${config.appSubUrl}/plugins/${pluginId}?page=configuration`}>
-            <Icon name="cog" size="sm" />
+          <LinkButton variant="secondary" fill="text" icon="cog" href={`${config.appSubUrl}/plugins/${pluginId}?page=configuration`}>
             {m.app.configuration}
-          </a>
-        </div>
-      </header>
+          </LinkButton>
+    </div>
+  );
+
+  return (
+    <PluginPage actions={headerActions} subTitle={false}>
+      <div className={styles.page}>
 
       {participantsMessage && (
         <Alert className={styles.notice} severity={participantsMessage.severity} title={m.participants.title}>
@@ -941,7 +876,7 @@ function Workspace() {
         />
       </TabsBar>
 
-      <section className={styles.stats} aria-label={m.filters.label}>
+      {listing && <section className={styles.stats} aria-label={m.table.caption}>
         {[
           { label: m.summary.matchingLabel, value: listing ? total : '—', tone: '' },
           { label: m.summary.active, value: listing ? summary.active : '—', tone: 'critical' },
@@ -950,13 +885,13 @@ function Workspace() {
           { label: m.summary.acknowledged, value: listing ? summary.acknowledged : '—', tone: 'success' },
           { label: m.summary.unacknowledged, value: listing ? summary.unacknowledged : '—', tone: '' },
           { label: m.summary.unassigned, value: listing ? summary.unassigned : '—', tone: '' },
-        ].map((stat, index) => (
+        ].filter((stat, index) => index === 0 || stat.value !== 0).map((stat, index) => (
           <div className={styles.stat} key={`${index}:${stat.label}`}>
             <span className={styles.statLabel}>{stat.label}</span>
             <strong className={stat.tone ? styles.statValue(stat.tone) : styles.statValuePlain}>{stat.value}</strong>
           </div>
         ))}
-      </section>
+      </section>}
 
       <DeepLinkNotice
         state={resolveState}
@@ -988,21 +923,7 @@ function Workspace() {
         </Alert>
       )}
 
-      <section className={styles.filtersPanel} aria-label={m.filters.label}>
-        <div className={styles.filterHeading}>
-          <span className={styles.filterTitle}>
-            <Icon name="filter" size="sm" />
-            {m.filters.label}
-            {activeFilters > 0 && <span className={styles.filterCount}>{activeFilters}</span>}
-          </span>
-          <span className={styles.rangeHint} title={m.range.rolling}>
-            {windowLabel && (
-              <>
-                <Icon name="calendar-alt" size="sm" /> {windowLabel}
-              </>
-            )}
-          </span>
-        </div>
+      <section className={styles.tableCard} aria-label={m.table.caption} aria-busy={listLoading || refreshing}>
 
         {query.view !== 'problems' && (
           <div className={styles.rangeRow}>
@@ -1037,184 +958,85 @@ function Workspace() {
                 </Button>
               </div>
             )}
-            {rangeError && <span className={styles.fieldError}>{rangeError}</span>}
+            {rangeError && <span role="alert" className={styles.fieldError}>{rangeError}</span>}
+            {windowLabel && <span className={styles.rangeHint} title={m.range.rolling}>{windowLabel}</span>}
           </div>
         )}
 
-        <form onSubmit={applyFilters}>
-          <div className={styles.filterRow}>
-            <Field label={m.filters.search} className={styles.searchField}>
-              <Input
-                type="search"
-                aria-label={m.filters.search}
-                placeholder={m.filters.searchPlaceholder}
-                value={searchDraft}
-                onChange={(event) => setSearchDraft(event.currentTarget.value)}
-              />
-            </Field>
-            <Field label={m.filters.severity} className={styles.field}>
-              <Select
-                aria-label={m.filters.severity}
-                options={severityOptions}
-                value={query.severity}
-                onChange={(option) => applySingleFilter({ severity: option.value ?? '' })}
-              />
-            </Field>
-            <Field label={m.filters.workflow} className={styles.field}>
-              <Select aria-label={m.filters.workflow} options={workflowOptions} value={query.workflow} onChange={(option) => applySingleFilter({ workflow: option.value ?? '' })} />
-            </Field>
-            <Field label={m.filters.workState} className={styles.field}>
-              <Select aria-label={m.filters.workState} options={workStateOptions} value={query.workState} onChange={(option) => applySingleFilter({ workState: option.value ?? '' })} />
-            </Field>
-            <Field label={m.filters.host} className={styles.field}>
-              <Input
-                aria-label={m.filters.host}
-                list="problem-desk-host-list"
-                placeholder={m.filters.hostPlaceholder}
-                value={hostDraft}
-                onChange={(event) => setHostDraft(event.currentTarget.value)}
-              />
-            </Field>
-            <Field label={m.filters.assignee} className={styles.field}>
-              <Input
-                aria-label={m.filters.assignee}
-                list="problem-desk-assignee-list"
-                placeholder={m.filters.assigneePlaceholder}
-                value={assigneeDraft}
-                onChange={(event) => setAssigneeDraft(event.currentTarget.value)}
-              />
-            </Field>
-            <Field label={m.filters.assignment} className={styles.field}>
-              <Select
-                aria-label={m.filters.assignment}
-                options={assignmentOptions}
-                value={query.assignment}
-                onChange={(option) => applySingleFilter({ assignment: option.value ?? 'all' })}
-              />
-            </Field>
-            <Field label={m.filters.ack} className={styles.field}>
-              <Select
-                aria-label={m.filters.ack}
-                options={ackOptions}
-                value={query.ack}
-                onChange={(option) => applySingleFilter({ ack: option.value ?? 'all' })}
-              />
-            </Field>
-            {query.view !== 'problems' && (
-              <Field label={m.filters.state} className={styles.field}>
-                <Select
-                  aria-label={m.filters.state}
-                  options={stateOptions}
-                  value={query.state}
-                  onChange={(option) => applySingleFilter({ state: option.value ?? 'all' })}
-                />
-              </Field>
-            )}
-          </div>
-          <div className={styles.filterRow}>
-            <Field label={m.filters.labelKey} className={styles.field}>
-              <Input
-                aria-label={m.filters.labelKey}
-                placeholder={m.filters.labelKeyPlaceholder}
-                list="problem-desk-label-list"
-                value={labelKeyDraft}
-                onChange={(event) => setLabelKeyDraft(event.currentTarget.value)}
-              />
-            </Field>
-            <Field label={m.filters.labelValue} className={styles.field}>
-              <Input
-                aria-label={m.filters.labelValue}
-                placeholder={m.filters.labelValuePlaceholder}
-                value={labelValueDraft}
-                onChange={(event) => setLabelValueDraft(event.currentTarget.value)}
-              />
-            </Field>
-            <Field label={m.filters.sort} className={styles.field}>
-              <Select
-                aria-label={m.filters.sort}
-                options={sortOptions}
-                value={query.sort}
-                onChange={(option) => applySingleFilter({ sort: option.value ?? 'severity' })}
-              />
-            </Field>
-            <Field label={m.filters.order} className={styles.field}>
-              <Select
-                aria-label={m.filters.order}
-                options={orderOptions}
-                value={query.order}
-                onChange={(option) => applySingleFilter({ order: option.value ?? 'desc' })}
-              />
-            </Field>
-            <div className={styles.filterActions}>
-              <Button type="submit" size="sm">
-                {m.filters.apply}
-              </Button>
-              <Button type="button" size="sm" variant="secondary" onClick={resetAllFilters} disabled={activeFilters === 0}>
-                {m.filters.reset}
-              </Button>
-            </div>
-          </div>
-          {filterError && <div className={styles.fieldError}>{filterError}</div>}
-          {(hostOptions.length > 0 || assigneeOptions.length > 0 || labelOptions.length > 0) && (
-            <>
-              <datalist id="problem-desk-host-list">
-                {hostOptions.map((option) => (
-                  <option value={option.value} key={option.value} />
-                ))}
-              </datalist>
-              <datalist id="problem-desk-assignee-list">
-                {assigneeOptions.map((option) => (
-                  <option value={option.value} key={option.value} />
-                ))}
-              </datalist>
-              <datalist id="problem-desk-label-list">
-                {labelOptions.map((option) => (
-                  <option value={option.value} key={option.value} />
-                ))}
-              </datalist>
-            </>
-          )}
-        </form>
-      </section>
-
-      <div className={styles.meta} role="status" aria-live="polite">
-        <span>
-          {listing ? m.summary.matching(total) : m.common.loading}
-          {refreshing && <span className={styles.refreshing}> · {m.common.refreshing}</span>}
-        </span>
-        <span>
-          {listing
-            ? m.source.lastSuccess(
-                listing.source.lastSuccess ? formatDate(listing.source.lastSuccess) : m.source.never
-              )
-            : '—'}
-        </span>
-        {lastLoadedAt > 0 && <span>{m.source.updated(formatRelative(new Date(lastLoadedAt).toISOString()))}</span>}
-        <span title={m.app.timeZone}>{zoneLabel}</span>
-      </div>
-
-      <section className={styles.tableCard} aria-busy={listLoading || refreshing}>
         <div className={styles.tableToolbar}>
-          <span className={styles.tableToolbarTitle}>
-            <Icon name="list-ul" size="sm" />
-            {m.table.caption}
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon="download-alt"
-            disabled={!listing?.problems.length}
-            onClick={exportPage}
-          >
+          <form className={styles.search} role="search" onSubmit={(event) => {
+            event.preventDefault();
+            applySingleFilter({ search: searchDraft.trim() });
+          }}>
+            <Input
+              type="search"
+              prefix={<Icon name="search" />}
+              aria-label={m.filters.search}
+              placeholder={m.filters.searchPlaceholder}
+              value={searchDraft}
+              maxLength={512}
+              onChange={(event) => setSearchDraft(event.currentTarget.value)}
+            />
+            <Button type="submit" variant="secondary">{m.filters.search}</Button>
+          </form>
+          <Button type="button" variant="secondary" icon="filter" aria-expanded={showAdvancedFilters} aria-controls="problem-desk-advanced-filters"
+            onClick={() => setShowAdvancedFilters((show) => !show)}>
+            {m.filters.more}
+          </Button>
+          {activeFilters > 0 && (
+            <Button type="button" variant="secondary" fill="text" icon="times" title={m.filters.activeCount(activeFilters)} onClick={resetAllFilters}>
+              {m.filters.reset} ({activeFilters})
+            </Button>
+          )}
+          <Button className={styles.export} type="button" variant="secondary" icon="download-alt"
+            disabled={!listing?.problems.length} onClick={exportPage}>
             {m.csv.exportPage}
           </Button>
         </div>
+        {showAdvancedFilters && (
+          <div className={styles.advanced} id="problem-desk-advanced-filters">
+            <div className={styles.filterRow}>
+              <Field label={m.filters.workflow} className={styles.field}>
+                <Select aria-label={m.filters.workflow} options={workflowOptions} value={query.workflow}
+                  onChange={(option) => applySingleFilter({ workflow: option.value ?? '' })} />
+              </Field>
+              <Field label={m.filters.workState} className={styles.field}>
+                <Select aria-label={m.filters.workState} options={workStateOptions} value={query.workState}
+                  onChange={(option) => applySingleFilter({ workState: option.value ?? '' })} />
+              </Field>
+              {problemColumns.filter((column) => !columns.includes(column)).map((column) => (
+                <ProblemColumnFilter key={column} column={column} labeled {...columnFilters} />
+              ))}
+            </div>
+            <form onSubmit={applyLabels} className={styles.filterRow}>
+              <Field label={m.filters.labelKey} className={styles.field}>
+                <Input aria-label={m.filters.labelKey} list="problem-desk-label-list" placeholder={m.filters.labelKeyPlaceholder}
+                  value={labelKeyDraft} onChange={(event) => setLabelKeyDraft(event.currentTarget.value)} />
+              </Field>
+              <Field label={m.filters.labelValue} className={styles.field}>
+                <Input aria-label={m.filters.labelValue} placeholder={m.filters.labelValuePlaceholder}
+                  value={labelValueDraft} onChange={(event) => setLabelValueDraft(event.currentTarget.value)} />
+              </Field>
+              <Button type="submit" variant="secondary">{m.common.apply}</Button>
+              <datalist id="problem-desk-label-list">
+                {labelOptions.map(({ value }) => <option key={value} value={value} />)}
+              </datalist>
+            </form>
+            {filterError && <div role="alert" className={styles.fieldError}>{filterError}</div>}
+          </div>
+        )}
+
+        {policy && (
+          <ProblemTable {...columnFilters}
+            problems={listing?.problems ?? []}
+            severityKey={listing?.severityKey ?? policy.doc.severityKey}
+            columns={columns} selectedId={selectedId} now={now} onOpen={openProblem} />
+        )}
         {listLoading && !listing && <TableSkeleton />}
         {empty && (
           <div className={styles.empty}>
-            <Icon name="check-circle" size="xl" />
-            <h2>{emptyTitle(query.view, m)}</h2>
-            <p>{emptyBody(query.view, m)}</p>
+            <h2>{activeFilters > 0 ? m.filters.noMatches : emptyTitle(query.view, m)}</h2>
+            {activeFilters === 0 && <p>{emptyBody(query.view, m)}</p>}
             {activeFilters > 0 && (
               <Button size="sm" variant="secondary" onClick={resetAllFilters}>
                 {m.empty.resetFilters}
@@ -1222,34 +1044,19 @@ function Workspace() {
             )}
           </div>
         )}
-        {listing && listing.problems.length > 0 && (
-          <ProblemTable problems={listing.problems} levels={listing.levels} severityKey={listing.severityKey} columns={policy?.doc.views.columns ?? []} selectedId={selectedId} now={now} onOpen={openProblem} />
-        )}
         {listing && (
           <div className={styles.pagination}>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={query.offset === 0}
-              onClick={() => navigate({ ...queryRef.current, offset: Math.max(0, query.offset - query.limit) })}
-            >
-              {m.pagination.previous}
-            </Button>
-            <span aria-live="polite">
-              {total === 0
-                ? m.summary.matching(0)
-                : m.pagination.range(query.offset + 1, Math.min(query.offset + query.limit, total), total)}
-              {' · '}
-              {m.pagination.page(Math.floor(query.offset / query.limit) + 1, pageCount(total, query.limit))}
-            </span>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={query.offset + query.limit >= total}
-              onClick={() => navigate({ ...queryRef.current, offset: query.offset + query.limit })}
-            >
-              {m.pagination.next}
-            </Button>
+             <Pagination
+               currentPage={Math.floor(query.offset / query.limit) + 1}
+               numberOfPages={pageCount(total, query.limit)}
+               onNavigate={(page) => navigate({ ...queryRef.current, offset: (page - 1) * query.limit })}
+               hideWhenSinglePage showSmallVersion
+             />
+             <span>
+               {total === 0
+                 ? m.summary.matching(0)
+                 : m.pagination.range(query.offset + 1, Math.min(query.offset + query.limit, total), total)}
+             </span>
             <span className={styles.pageSize}>
               <span>{m.pagination.pageSize}</span>
               <Select<WorkspaceQuery['limit']>
@@ -1265,6 +1072,12 @@ function Workspace() {
           </div>
         )}
       </section>
+      <div className={styles.meta} role="status">
+        {listLoading && <span>{m.common.loading}</span>}
+        {refreshing && <span>{m.common.refreshing}</span>}
+        {listing && <span>{m.source.lastSuccess(listing.source.lastSuccess ? formatDate(listing.source.lastSuccess) : m.source.never)}</span>}
+        {lastLoadedAt > 0 && <span>{m.source.updated(formatRelative(new Date(lastLoadedAt).toISOString()))}</span>}
+      </div>
 
       <DetailDrawer
         selectedId={selectedId}
@@ -1295,8 +1108,13 @@ function Workspace() {
         onAssign={assignOwner}
         onComment={addComment}
       />
-    </main>
+      </div>
+    </PluginPage>
   );
+}
+
+function listQueryKey(query: WorkspaceQuery): string {
+  return queryString(closeProblem(query));
 }
 
 function emptyTitle(view: View, messages: ReturnType<typeof useI18n>['messages']): string {
@@ -1380,43 +1198,9 @@ function DeepLinkNotice({
 
 const getStyles = (theme: GrafanaTheme2) => ({
   page: css`
-    box-sizing: border-box;
-    width: 100%;
-    max-width: 1920px;
-    min-width: 0;
-    margin: 0 auto;
-    padding: ${theme.spacing(2.5)};
-    @media (max-width: 640px) {
-      padding: ${theme.spacing(1.5)};
-    }
-  `,
-  header: css`
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: ${theme.spacing(2)};
-    flex-wrap: wrap;
-  `,
-  heading: css`
-    min-width: 240px;
-    flex: 1 1 360px;
-  `,
-  titleRow: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    color: ${theme.colors.primary.text};
-  `,
-  h1: css`
-    margin: 0;
-    font-size: ${theme.typography.h3.fontSize};
-    line-height: ${theme.typography.h3.lineHeight};
-  `,
-  subtitle: css`
-    margin: ${theme.spacing(0.5)} 0 0;
-    color: ${theme.colors.text.secondary};
-    max-width: 78ch;
-  `,
+     min-width: 0;
+     padding-bottom: ${theme.spacing(2)};
+   `,
   headerActions: css`
     display: flex;
     align-items: center;
@@ -1427,13 +1211,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   notice: css`
     margin-top: ${theme.spacing(1)};
-  `,
-  configLink: css`
-    display: inline-flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    color: ${theme.colors.text.link};
-    white-space: nowrap;
   `,
   tabs: css`
     margin-top: ${theme.spacing(1.5)};
@@ -1490,39 +1267,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: ${theme.colors.background.secondary};
     color: ${theme.colors.text.secondary};
   `,
-  filtersPanel: css`
+  advanced: css`
     padding: ${theme.spacing(1.5)};
-    margin-bottom: ${theme.spacing(1)};
-    border: 1px solid ${theme.colors.border.weak};
-    border-radius: ${theme.shape.radius.default};
+    border-bottom: 1px solid ${theme.colors.border.weak};
     background: ${theme.colors.background.canvas};
-  `,
-  filterHeading: css`
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    display: grid;
     gap: ${theme.spacing(1)};
-    flex-wrap: wrap;
-    margin-bottom: ${theme.spacing(1)};
-  `,
-  filterTitle: css`
-    display: inline-flex;
-    align-items: center;
-    gap: ${theme.spacing(0.75)};
-    color: ${theme.colors.text.secondary};
-    font-weight: ${theme.typography.fontWeightMedium};
-  `,
-  filterCount: css`
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 20px;
-    height: 20px;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: ${theme.colors.primary.main};
-    color: ${theme.colors.primary.contrastText};
-    font-size: 12px;
   `,
   rangeHint: css`
     display: inline-flex;
@@ -1536,7 +1286,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
     align-items: flex-end;
     flex-wrap: wrap;
     gap: ${theme.spacing(1.5)};
-    margin-bottom: ${theme.spacing(1)};
+     padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
+     border-bottom: 1px solid ${theme.colors.border.weak};
   `,
   rangeField: css`
     flex: 1 1 420px;
@@ -1558,7 +1309,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     align-items: flex-end;
     flex-wrap: wrap;
     gap: ${theme.spacing(1)};
-    margin-bottom: ${theme.spacing(1)};
   `,
   field: css`
     flex: 0 1 168px;
@@ -1568,21 +1318,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
       flex: 1 1 100%;
     }
   `,
-  searchField: css`
-    flex: 1 1 260px;
-    min-width: 200px;
-    margin-bottom: 0;
-    @media (max-width: 640px) {
-      flex: 1 1 100%;
-    }
-  `,
-  filterActions: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    margin-bottom: 2px;
-    flex-wrap: wrap;
-  `,
+   search: css`
+     display: flex;
+     align-items: center;
+     gap: ${theme.spacing(0.75)};
+     flex: 1 1 280px;
+     min-width: 0;
+     max-width: 540px;
+     @media (max-width: 640px) { flex-basis: 100%; max-width: none; }
+   `,
+   export: css`
+     margin-left: auto;
+     @media (max-width: 640px) { margin-left: 0; }
+   `,
   fieldError: css`
     color: ${theme.colors.error.text};
     font-size: ${theme.typography.bodySmall.fontSize};
@@ -1597,9 +1345,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     font-size: ${theme.typography.bodySmall.fontSize};
     margin: ${theme.spacing(1)} 0;
   `,
-  refreshing: css`
-    color: ${theme.colors.text.disabled};
-  `,
   tableCard: css`
     min-width: 0;
     border: 1px solid ${theme.colors.border.weak};
@@ -1610,18 +1355,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
   tableToolbar: css`
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: ${theme.spacing(1)};
     flex-wrap: wrap;
     padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
     border-bottom: 1px solid ${theme.colors.border.weak};
-  `,
-  tableToolbarTitle: css`
-    display: inline-flex;
-    align-items: center;
-    gap: ${theme.spacing(0.75)};
-    color: ${theme.colors.text.secondary};
-    font-weight: ${theme.typography.fontWeightMedium};
   `,
   empty: css`
     padding: ${theme.spacing(6)} ${theme.spacing(3)};

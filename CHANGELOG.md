@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- Package release artifacts with the selected release version in the plugin manifest and ZIP name.
+
 ## 0.3.1
 
 - Choose an assignee from a searchable organization participant list instead of typing a login.

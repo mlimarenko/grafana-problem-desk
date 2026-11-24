@@ -34,6 +34,9 @@ func TestListingViewsFiltersAndIsolation(t *testing.T) {
 	long.Annotations["quote"] = `with "quotes"`
 	recent := alert("recent", "2026-01-02T00:00:00.125Z", "warning", "RecentHost")
 	active := alert("active", "2026-01-03T00:00:00Z", "warning", "ActiveHost")
+	active.Annotations["summary"] = "  "
+	active.Labels["alertname"] = "  Альфа  "
+	recent.Annotations["summary"] = "  Бета  "
 	if err = s.SyncSnapshot(ctx, 1, start, []storage.SnapshotAlert{old, long}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +129,40 @@ func TestListingViewsFiltersAndIsolation(t *testing.T) {
 	q = url.Values{"assignment": {"assigned"}, "assignee": {"alice"}, "ack": {"acknowledged"}}
 	if r = list(q.Encode()); r.Total != 1 || r.Summary.Acknowledged != 1 || r.Summary.Unassigned != 0 || len(r.Facets.Hosts) != 2 {
 		t.Fatalf("assigned and acknowledged: %+v", r)
+	}
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{"view=recent&from=2026-01-02T23:59:59Z&to=2026-01-04T00:00:00Z&sort=name&order=asc", []string{"long", "active", "recent"}},
+		{"view=recent&from=2026-01-02T23:59:59Z&to=2026-01-04T00:00:00Z&sort=name&order=asc&limit=1&offset=1", []string{"active"}},
+		{"sort=assignee&order=desc", []string{"long", "active"}},
+		{"sort=ack&order=desc", []string{"long", "active"}},
+		{"view=recent&from=2026-01-02T23:59:59Z&to=2026-01-04T00:00:00Z&sort=status&order=desc&limit=1", []string{"recent"}},
+		{"title=%20%D0%90%D0%9B%D0%AC%D0%A4%20", []string{"active"}},
+		{"view=recent&from=2026-01-02T23:59:59Z&to=2026-01-04T00:00:00Z&startedFrom=2026-01-02T00:00:00.125Z&startedTo=2026-01-02T00:00:00.125Z&minDuration=86399&maxDuration=86400", []string{"recent"}},
+		{"view=recent&from=2026-01-02T23:59:59Z&to=2026-01-04T00:00:00Z&maxDuration=0", nil},
+	} {
+		r = list(tc.query)
+		if len(r.Problems) != len(tc.want) {
+			t.Errorf("%s: got %+v", tc.query, r)
+			continue
+		}
+		for i, fp := range tc.want {
+			if r.Problems[i].Fingerprint != fp {
+				t.Errorf("%s: got %+v", tc.query, r.Problems)
+				break
+			}
+		}
+		if strings.Contains(tc.query, "minDuration") && (r.Total != 1 || r.Summary.Recovered != 1 || r.Summary.Active != 0) {
+			t.Errorf("filtered summary: %+v", r)
+		}
+	}
+	for _, query := range []string{"startedFrom=bad", "startedTo=", "startedFrom=2026-01-02T00:00:00Z&startedTo=2026-01-01T00:00:00Z", "minDuration=-1", "maxDuration=1.5", "minDuration=2&maxDuration=1", "minDuration=", "title=" + strings.Repeat("a", 513)} {
+		resp := call(a, http.MethodGet, "problems?"+query, 1, user, nil, nil)
+		if resp.Status != 400 {
+			t.Errorf("%s status %d", query, resp.Status)
+		}
 	}
 	for _, query := range []string{"view=wat", "state=recovered", "limit=101", "offset=-1", "sort=bad", "from=2026-01-01T00%3A00%3A00Z", "view=history&from=2026-01-01T00%3A00%3A00Z", "view=history&from=2020-01-01T00%3A00%3A00Z&to=2022-01-01T00%3A00%3A00Z", "labelKey=x", "search=%ZZ"} {
 		resp := call(a, http.MethodGet, "problems?"+query, 1, user, nil, nil)

@@ -77,7 +77,7 @@ export function formatRelativeTime(value: string, now: number, language: Languag
   return relative.format(Math.round(deltaSeconds / 86400), 'day');
 }
 
-export function toDateTimeLocalValue(value: string): string {
+export function toDateTimeLocalValue(value: string, mode: TimeZoneMode = 'local', showSeconds = false): string {
   if (!value) {
     return '';
   }
@@ -85,15 +85,15 @@ export function toDateTimeLocalValue(value: string): string {
   if (Number.isNaN(date.getTime())) {
     return '';
   }
-  const pad = (part: number) => String(part).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const clock = mode === 'UTC' ? date : new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return clock.toISOString().slice(0, showSeconds ? 19 : 16);
 }
 
-export function dateTimeLocalToISO(value: string): string | undefined {
+export function dateTimeLocalToISO(value: string, mode: TimeZoneMode = 'local'): string | undefined {
   if (!value) {
     return undefined;
   }
-  const date = new Date(value);
+  const date = new Date(mode === 'UTC' ? `${value}Z` : value);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 

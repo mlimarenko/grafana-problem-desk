@@ -16,17 +16,9 @@ The Recent and History windows are chosen above the list with bounded start and 
 
 ## Filters
 
-Filters combine; every counter and page reflects the whole filtered selection.
+Use the filter icon in a column header to narrow the list. The Problem column filters by title and by host; Started and Duration accept one or two bounds. The Owner column filters by exact owner or by whether an owner is assigned. The Status filter is available in Recent and History; Problems always shows active episodes.
 
-- **Acknowledgement**: acknowledged, not acknowledged or any.
-- **Owner**: exact owner label value.
-- **Host**: part of the target host. The host is read from the `host`, then `hostname`, then `instance` label.
-- **Severity / importance**: exact configured importance level, selected by level id. The canonical filter key is `severity=<level id>`; the level list comes from the organization policy. A custom source value that has no alias stays visible as the raw value. Sorting follows the configured level rank. Raw source severity is not mapped twice: use the exact label filter for the raw label value.
-- **Source state**: active, recovered or any, matching the episode's technical source state.
-- **Workflow / operator state**: filter by the pinned workflow and its current operator state. These are distinct from the source-state filter; untracked episodes have no workflow or operator state.
-- **Date**: the start and end of the Recent or History window. Problems does not depend on it.
-- **Labels**: exact label key and value.
-- **Search**: text over the alert fingerprint, labels and annotations.
+**More filters** contains workflow, operator state, exact labels, and filters for columns hidden by the organization policy. The search field searches fingerprints, labels and annotations. To filter on the original source severity rather than the configured importance level, use its exact label.
 
 Changing a filter, a window or the sort order returns the list to its first page. The address bar keeps the selected episode, so a link opens the same inspector for another member of the organization.
 
@@ -44,9 +36,9 @@ are reported rather than selecting an arbitrary problem.
 
 ## Counters, sorting and paging
 
-The backend computes counters, sorting and paging over the full filtered selection, not over the rows already loaded. Counters show the total plus active, recovered, acknowledged, unacknowledged, unassigned and a count for each configured importance level. Filter lists for hosts, owners and label keys offer the values present in the current tab.
+The backend filters and sorts the whole selection before paging. Nonzero counters above the table describe all matching episodes. Host, owner and label suggestions come from the current tab.
 
-Sortable columns are importance (severity), start time, duration and recovery time, in either direction. Duration is calculated when the table is displayed: for an active episode it runs to the current time, for a recovered episode to its recovery. Page size is 25, 50 or 100 rows. The organization policy supplies the default Recent and History windows and the visible columns; an explicit window in the address overrides the default.
+Select any heading to sort by that column; select it again to reverse the order. In Recent and History, the Status menu also offers sorting by recovery time. Duration runs from start to recovery, or to the current time for an active episode. Page size is 25, 50 or 100 rows. The organization policy supplies the default Recent and History windows and the visible columns; an explicit window in the address overrides the default.
 
 ## Inspector
 

@@ -64,7 +64,8 @@ export interface PolicyTransition { from: string; to: string; minimumRole: Minim
 export interface PolicyWorkflow { id: string; name: LocalizedName; initialState: string; minimumRole: MinimumRole; startRequires: Requires; states: PolicyState[]; transitions: PolicyTransition[] }
 export interface PolicyRoute { match: { labels: Record<string, string>; level?: string }; workflow: string }
 export type PolicyRange = '1h' | '24h' | '7d' | '30d';
-export type PolicyColumn = 'level' | 'name' | 'status' | 'started' | 'duration' | 'owner' | 'ack';
+export const problemColumns = ['level', 'name', 'status', 'started', 'duration', 'owner', 'ack'] as const;
+export type PolicyColumn = (typeof problemColumns)[number];
 export interface PolicyViews { recent: PolicyRange; history: PolicyRange; columns: PolicyColumn[] }
 export interface PolicyDoc { schemaVersion: 1; severityKey: string; levels: Level[]; workflows: PolicyWorkflow[]; routing: PolicyRoute[]; defaultWorkflow: string | null; views: PolicyViews; source: { recoveredTrustMinutes: number } }
 export interface PolicyResponse { revision: number; doc: PolicyDoc; defaultsApplied: boolean; occupancy: Array<{ workflowId: string; stateId: string; count: number }> }

@@ -1,3 +1,5 @@
+import type { PolicyColumn } from '../model';
+
 export const views = ['problems', 'recent', 'history'] as const;
 export type View = (typeof views)[number];
 
@@ -7,7 +9,8 @@ export type RangePreset = (typeof rangePresets)[number];
 export type StateFilter = 'all' | 'active' | 'recovered';
 export type AssignmentFilter = 'all' | 'assigned' | 'unassigned';
 export type AckFilter = 'all' | 'acknowledged' | 'unacknowledged';
-export type SortKey = 'severity' | 'started' | 'duration' | 'recovered';
+const sortKeys = ['severity', 'name', 'status', 'started', 'duration', 'assignee', 'ack', 'recovered'] as const;
+export type SortKey = (typeof sortKeys)[number];
 export type SortOrder = 'asc' | 'desc';
 export type PageSize = 25 | 50 | 100;
 
@@ -37,6 +40,11 @@ export interface WorkspaceQuery extends DeepLinkQuery {
   assignee: string;
   assignment: AssignmentFilter;
   ack: AckFilter;
+  title: string;
+  startedFrom: string;
+  startedTo: string;
+  minDuration: string;
+  maxDuration: string;
   search: string;
   labelKey: string;
   labelValue: string;
@@ -53,6 +61,37 @@ export const defaultLimit: PageSize = 50;
 export const defaultSort: SortKey = 'severity';
 export const defaultOrder: SortOrder = 'desc';
 export const maxCustomRangeMs = 366 * 24 * 60 * 60 * 1000;
+
+const bounds = ['title', 'startedFrom', 'startedTo', 'minDuration', 'maxDuration'] as const;
+const columnScopes = {
+  level: { severity: '' },
+  name: { title: '', host: '' },
+  status: { state: 'all' },
+  started: { startedFrom: '', startedTo: '' },
+  duration: { minDuration: '', maxDuration: '' },
+  owner: { assignee: '', assignment: 'all' },
+  ack: { ack: 'all' },
+} as const satisfies Record<PolicyColumn, Partial<WorkspaceQuery>>;
+
+export const sortByColumn: Record<PolicyColumn, SortKey> = {
+  level: 'severity', name: 'name', status: 'status', started: 'started', duration: 'duration', owner: 'assignee', ack: 'ack',
+};
+
+export function clearColumnFilter(column: PolicyColumn): Partial<WorkspaceQuery> {
+  return columnScopes[column];
+}
+
+export function columnFilterActive(column: PolicyColumn, query: WorkspaceQuery): boolean {
+  if (column === 'status' && query.view === 'problems') return false;
+  const scope: Partial<WorkspaceQuery> = columnScopes[column];
+  return (Object.keys(scope) as Array<keyof WorkspaceQuery>).some((key) => scope[key] !== query[key]);
+}
+
+export function toggleSort(query: WorkspaceQuery, sort: SortKey): WorkspaceQuery {
+  const defaultDirection = sort === 'severity' || sort === 'started' || sort === 'duration' || sort === 'recovered' ? 'desc' : 'asc';
+  const order = query.sort === sort ? (query.order === 'asc' ? 'desc' : 'asc') : defaultDirection;
+  return { ...query, sort, order, offset: 0 };
+}
 
 const presetMs: Record<Exclude<RangePreset, 'custom'>, number> = {
   '1h': 60 * 60 * 1000,
@@ -72,6 +111,25 @@ function read(value: string | null, max: number): string {
 
 function readRaw(value: string | null): string {
   return value ?? '';
+}
+
+function readInstant(value: string | null): string {
+  const text = read(value, 64);
+  if (!isRFC3339(text) || text.slice(11, 13) === '24') return '';
+  const day = new Date(`${text.slice(0, 10)}T00:00:00Z`);
+  const utcYear = new Date(text).getUTCFullYear();
+  return day.toISOString().slice(0, 10) === text.slice(0, 10) && utcYear >= 0 && utcYear <= 9999 ? text : '';
+}
+
+export function compareInstants(left: string, right: string): number {
+  const remainder = (text: string) => (/\.(\d+)/.exec(text)?.[1] ?? '').slice(3, 9).padEnd(6, '0');
+  return Date.parse(left) - Date.parse(right) || Number(remainder(left)) - Number(remainder(right));
+}
+
+function readSeconds(value: string | null): string {
+  const text = read(value, 16);
+  const number = Number(text);
+  return /^\d+$/.test(text) && Number.isSafeInteger(number) ? String(number) : '';
 }
 
 export function defaultRangeFor(view: View, defaults?: { recent: Exclude<RangePreset, 'custom'>; history: Exclude<RangePreset, 'custom'> }): RangePreset {
@@ -114,6 +172,17 @@ export function parseQuery(search: string, defaults?: { recent: Exclude<RangePre
   const limit: PageSize = limitValue === 25 || limitValue === 100 ? limitValue : defaultLimit;
   const offsetValue = Number(params.get('offset'));
   const offset = Number.isInteger(offsetValue) && offsetValue > 0 ? offsetValue : 0;
+  const title = read(params.get('title'), 512);
+  let startedFrom = readInstant(params.get('startedFrom'));
+  let startedTo = readInstant(params.get('startedTo'));
+  if (startedFrom && startedTo && compareInstants(startedFrom, startedTo) > 0) {
+    startedFrom = startedTo = '';
+  }
+  let minDuration = readSeconds(params.get('minDuration'));
+  let maxDuration = readSeconds(params.get('maxDuration'));
+  if (minDuration && maxDuration && Number(minDuration) > Number(maxDuration)) {
+    minDuration = maxDuration = '';
+  }
   return {
     view,
     range,
@@ -128,12 +197,17 @@ export function parseQuery(search: string, defaults?: { recent: Exclude<RangePre
     assignee: read(params.get('assignee'), 256),
     assignment: oneOf(params.get('assignment'), ['all', 'assigned', 'unassigned'], 'all'),
     ack: oneOf(params.get('ack'), ['all', 'acknowledged', 'unacknowledged'], 'all'),
+    title: new TextEncoder().encode(title).length <= 512 ? title : '',
+    startedFrom,
+    startedTo,
+    minDuration,
+    maxDuration,
     search: read(params.get('search'), 512),
     labelKey: readRaw(params.get('labelKey')),
     labelValue: readRaw(params.get('labelValue')),
     labelKeyPresent: params.has('labelKey'),
     labelValuePresent: params.has('labelValue'),
-    sort: oneOf(params.get('sort'), ['severity', 'started', 'duration', 'recovered'], defaultSort),
+    sort: oneOf(params.get('sort'), sortKeys, defaultSort),
     order: oneOf(params.get('order'), ['asc', 'desc'], defaultOrder),
     limit,
     offset,
@@ -203,14 +277,15 @@ export function withView(query: WorkspaceQuery, view: View, defaults?: { recent:
 export function resetFilters(query: WorkspaceQuery): WorkspaceQuery {
   return {
     ...query,
-    state: 'all',
-    severity: '',
+    ...columnScopes.level,
+    ...columnScopes.name,
+    ...columnScopes.status,
+    ...columnScopes.started,
+    ...columnScopes.duration,
+    ...columnScopes.owner,
+    ...columnScopes.ack,
     workflow: '',
     workState: '',
-    host: '',
-    assignee: '',
-    assignment: 'all',
-    ack: 'all',
     search: '',
     labelKey: '',
     labelValue: '',
@@ -221,17 +296,11 @@ export function resetFilters(query: WorkspaceQuery): WorkspaceQuery {
 }
 
 export function activeFilterCount(query: WorkspaceQuery): number {
-  let count = 0;
-  if (query.severity) count += 1;
+  let count = (Object.keys(columnScopes) as PolicyColumn[]).filter((column) => columnFilterActive(column, query)).length;
   if (query.workflow) count += 1;
   if (query.workState) count += 1;
-  if (query.host) count += 1;
-  if (query.assignee) count += 1;
-  if (query.assignment !== 'all') count += 1;
-  if (query.ack !== 'all') count += 1;
   if (query.search) count += 1;
   if (query.labelKeyPresent || query.labelValuePresent) count += 1;
-  if (query.view !== 'problems' && query.state !== 'all') count += 1;
   return count;
 }
 
@@ -277,6 +346,7 @@ export function buildProblemsRequest(query: WorkspaceQuery, now: Date): Problems
   if (query.assignee) request.assignee = query.assignee;
   if (query.assignment !== 'all') request.assignment = query.assignment;
   if (query.ack !== 'all') request.ack = query.ack;
+  for (const key of bounds) if (query[key]) request[key] = query[key];
   if (query.search) request.search = query.search;
   if (query.labelKeyPresent) request.labelKey = query.labelKey;
   if (query.labelValuePresent) request.labelValue = query.labelValue;
@@ -301,6 +371,7 @@ export function serializeQuery(query: WorkspaceQuery): URLSearchParams {
   if (query.assignee) params.set('assignee', query.assignee);
   if (query.assignment !== 'all') params.set('assignment', query.assignment);
   if (query.ack !== 'all') params.set('ack', query.ack);
+  for (const key of bounds) if (query[key]) params.set(key, query[key]);
   if (query.search) params.set('search', query.search);
   if (query.labelKeyPresent) params.set('labelKey', query.labelKey);
   if (query.labelValuePresent) params.set('labelValue', query.labelValue);
@@ -341,6 +412,7 @@ const ownedKeys = new Set([
   'assignee',
   'assignment',
   'ack',
+  ...bounds,
   'search',
   'labelKey',
   'labelValue',

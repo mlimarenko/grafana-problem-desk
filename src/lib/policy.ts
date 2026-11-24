@@ -1,4 +1,4 @@
-import { normalizeMinimumRole, type PolicyDoc, type PolicyIssue, type Requires } from '../model';
+import { normalizeMinimumRole, problemColumns, type PolicyDoc, type PolicyIssue, type Requires } from '../model';
 
 export interface LabelRow { key: string; value: string }
 export interface PolicyDraft { doc: PolicyDoc; routeLabels: LabelRow[][] }
@@ -162,7 +162,7 @@ export function parsePolicyJSON(json: string): PolicyDoc {
   if (doc.defaultWorkflow !== null) text(doc.defaultWorkflow);
   const views = object(doc.views, ['recent', 'history', 'columns']);
   if (!['1h', '24h', '7d', '30d'].includes(String(views.recent)) || !['1h', '24h', '7d', '30d'].includes(String(views.history))) throw new Error('invalid_json');
-  if (array(views.columns).some((column) => !['level', 'name', 'status', 'started', 'duration', 'owner', 'ack'].includes(String(column)))) throw new Error('invalid_json');
+  if (array(views.columns).some((column) => !problemColumns.some((known) => known === String(column)))) throw new Error('invalid_json');
   const source = object(doc.source, ['recoveredTrustMinutes']); integer(source.recoveredTrustMinutes);
   return doc as unknown as PolicyDoc;
 }

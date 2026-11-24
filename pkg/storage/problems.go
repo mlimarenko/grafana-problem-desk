@@ -15,6 +15,37 @@ import (
 )
 
 func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("problemdesk_lower", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		text, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid text value")
+		}
+		return strings.ToLower(text), nil
+	})
+	sqlite.MustRegisterDeterministicScalarFunction("problemdesk_title", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		summary, _ := args[0].(string)
+		alertname, _ := args[1].(string)
+		if title := strings.TrimSpace(summary); title != "" {
+			return title, nil
+		}
+		return strings.TrimSpace(alertname), nil
+	})
+	sqlite.MustRegisterDeterministicScalarFunction("problemdesk_duration", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		start, okStart := args[0].(string)
+		end, okEnd := args[1].(string)
+		if !okStart || !okEnd || start == "" || end == "" {
+			return nil, nil
+		}
+		a, err := time.Parse(time.RFC3339Nano, start)
+		if err != nil {
+			return nil, err
+		}
+		b, err := time.Parse(time.RFC3339Nano, end)
+		if err != nil {
+			return nil, err
+		}
+		return float64(b.Unix()-a.Unix()) + float64(b.Nanosecond()-a.Nanosecond())/1e9, nil
+	})
 	sqlite.MustRegisterDeterministicScalarFunction("problemdesk_contains", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
 		text, okText := args[0].(string)
 		query, okQuery := args[1].(string)
@@ -53,9 +84,14 @@ type ProblemQuery struct {
 	Sort, Order                                                                                               string
 	From, To, Now                                                                                             time.Time
 	Limit, Offset                                                                                             int
+	Title                                                                                                     string
+	StartedFrom, StartedTo                                                                                    *time.Time
+	MinDuration, MaxDuration                                                                                  *int64
 }
 
 const hostExpr = `COALESCE(NULLIF(json_extract(labels, '$.host'), ''), NULLIF(json_extract(labels, '$.hostname'), ''), NULLIF(json_extract(labels, '$.piping_host_name'), ''), NULLIF(json_extract(labels, '$.instance'), ''), '')`
+const titleExpr = `problemdesk_title(json_extract(annotations, '$.summary'), json_extract(labels, '$.alertname'))`
+const durationExpr = `problemdesk_duration(starts_at, CASE WHEN status='active' THEN ? ELSE ends_at END)`
 
 // levelRankCase builds a parameterized rank expression for the active levels.
 // Retired level ids fall below every configured level.
@@ -148,6 +184,21 @@ func (s *Store) GetProblems(ctx context.Context, orgID int64, q ProblemQuery) (m
 	if q.LabelKey != "" {
 		add("EXISTS (SELECT 1 FROM json_each(problems.labels) WHERE key = ? AND value = ?)", q.LabelKey, q.LabelValue)
 	}
+	if q.Title != "" {
+		add("problemdesk_contains("+titleExpr+", ?)", q.Title)
+	}
+	if q.StartedFrom != nil {
+		add("problemdesk_time_key(starts_at) >= problemdesk_time_key(?)", stamp(*q.StartedFrom))
+	}
+	if q.StartedTo != nil {
+		add("problemdesk_time_key(starts_at) <= problemdesk_time_key(?)", stamp(*q.StartedTo))
+	}
+	if q.MinDuration != nil {
+		add(durationExpr+" >= ?", stamp(q.Now), *q.MinDuration)
+	}
+	if q.MaxDuration != nil {
+		add(durationExpr+" <= ?", stamp(q.Now), *q.MaxDuration)
+	}
 	filter := strings.Join(where, " AND ")
 	countSQL := `SELECT count(*), COALESCE(sum(status='active'),0), COALESCE(sum(status='recovered'),0), COALESCE(sum(acknowledged_by<>''),0), COALESCE(sum(acknowledged_by=''),0), COALESCE(sum(assignee=''),0) FROM problems WHERE ` + filter
 	if err = tx.QueryRowContext(ctx, countSQL, args...).Scan(&r.Total, &r.Summary.Active, &r.Summary.Recovered, &r.Summary.Acknowledged, &r.Summary.Unacknowledged, &r.Summary.Unassigned); err != nil {
@@ -178,13 +229,16 @@ func (s *Store) GetProblems(ctx context.Context, orgID int64, q ProblemQuery) (m
 	}
 
 	rankExpr, rankArgs := levelRankCase(snapshot.Compiled)
-	sorts := map[string]string{"severity": rankExpr, "started": "problemdesk_time_key(starts_at)", "recovered": "problemdesk_time_key(ends_at)", "duration": "(julianday(CASE WHEN status='active' THEN ? ELSE ends_at END) - julianday(starts_at))"}
+	sorts := map[string]string{"severity": rankExpr, "started": "problemdesk_time_key(starts_at)", "recovered": "problemdesk_time_key(ends_at)", "duration": durationExpr, "name": "problemdesk_lower(" + titleExpr + ")", "status": "status", "assignee": "problemdesk_lower(assignee)", "ack": "(acknowledged_by <> '')"}
 	sortExpr, ok := sorts[q.Sort]
 	if !ok || (q.Order != "asc" && q.Order != "desc") {
 		return r, fmt.Errorf("invalid sort")
 	}
 	direction := strings.ToUpper(q.Order)
 	orderClause := sortExpr + " " + direction + ", id " + direction
+	if q.Sort == "assignee" {
+		orderClause = "(assignee = '') ASC, " + orderClause
+	}
 	if q.Sort == "severity" {
 		orderClause = rankExpr + " " + direction + ", level_id ASC, id " + direction
 	}

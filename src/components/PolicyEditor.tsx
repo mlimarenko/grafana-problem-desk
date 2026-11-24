@@ -6,10 +6,9 @@ import { errorStatus, fetchPolicy, fetchPolicyRevision, fetchPolicyRevisions, pr
 import { useI18n } from '../i18n';
 import type { PolicyMessages } from '../i18n/messages';
 import { documentFromDraft, draftFromPolicy, labelsFromRows, localizePolicyIssue, parsePolicyJSON, policySaveRevision, reducePolicyEditor, type LabelRow, type PolicyDraft } from '../lib/policy';
-import type { LevelTone, PolicyColumn, PolicyDoc, PolicyIssue, PolicyPreview, PolicyPreviewSample, PolicyRange, PolicyRevision, Requires } from '../model';
+import { problemColumns, type LevelTone, type PolicyDoc, type PolicyIssue, type PolicyPreview, type PolicyPreviewSample, type PolicyRange, type PolicyRevision, type Requires } from '../model';
 
 const tones: LevelTone[] = ['red', 'orange', 'yellow', 'blue', 'green', 'purple', 'grey'];
-const columns: PolicyColumn[] = ['level', 'name', 'status', 'started', 'duration', 'owner', 'ack'];
 const ranges: PolicyRange[] = ['1h', '24h', '7d', '30d'];
 const gates: Array<keyof Requires> = ['ack', 'owner', 'comment', 'sourceRecovered'];
 
@@ -277,7 +276,7 @@ export function PolicyEditor() {
 
       <h3>{m.views}</h3>
       {(['recent', 'history'] as const).map((key) => <Choice key={key} label={m[key]} value={doc.views[key]} options={ranges.map((value) => ({ value, label: value }))} onChange={(value) => edit((d) => { d.doc.views[key] = value as PolicyRange; })} />)}
-      <fieldset><legend>{m.columns}</legend>{columns.map((column) => <Check key={column} label={m.columnNames[column]} checked={doc.views.columns.includes(column)} onChange={(checked) => edit((d) => { d.doc.views.columns = checked ? [...d.doc.views.columns, column] : d.doc.views.columns.filter((item) => item !== column); })} />)}</fieldset>
+      <fieldset><legend>{m.columns}</legend>{problemColumns.map((column) => <Check key={column} label={m.columnNames[column]} checked={doc.views.columns.includes(column)} onChange={(checked) => edit((d) => { d.doc.views.columns = checked ? [...d.doc.views.columns, column] : d.doc.views.columns.filter((item) => item !== column); })} />)}</fieldset>
       <TextField label={m.recoveredTrust} type="number" value={doc.source.recoveredTrustMinutes} onChange={(value) => edit((d) => { d.doc.source.recoveredTrustMinutes = Number(value); })} /><p>{m.sourceHelp}</p>
 
       <h3>{m.samples}</h3>{samples.map((sample, i) => <div className={styles.item} key={i}>

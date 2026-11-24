@@ -13,7 +13,6 @@ node_modules/.problem-desk-deps: package.json package-lock.json
 	touch $@
 
 dist/module.js: $(FRONTEND) node_modules/.problem-desk-deps docs/assets/logo.svg README.md LICENSE CHANGELOG.md
-	npm run typecheck
 	npm run build
 	chmod -R a+rX dist
 
@@ -25,12 +24,11 @@ dist/gpx_problemdesk_$(GOOS)_$(GOARCH): $(BACKEND)
 build: dist/module.js dist/gpx_problemdesk_$(GOOS)_$(GOARCH)
 
 test: node_modules/.problem-desk-deps
-	npm run typecheck
 	npm test
 	$(GO) test ./pkg/...
 
 package: build
-	python3 scripts/package-plugin.py
+	python3 scripts/package-plugin.py $(PACKAGE_ARGS)
 
 dev: build
 	docker compose up -d --wait

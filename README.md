@@ -12,7 +12,7 @@ Problem Desk is an app plugin for working with problem episodes from Grafana Ale
 ## What it adds
 
 - Problems, Recent and History views with server-side filters and pagination
-- Host, level, acknowledgement, owner and label filters; time windows and duration sorting
+- Column filters and sorting across the full episode list, with time windows and exact label filters
 - Organization policy with configurable importance levels, operator workflows, exact label routing and view defaults
 - A discussion attached to a specific occurrence, not a point on a graph
 - Acknowledgement, searchable assignee selection and an operator activity log

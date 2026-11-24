@@ -10,6 +10,7 @@ import type { ResolveRequest } from './lib/deeplink';
 import { buildProblemsRequest, type WorkspaceQuery } from './lib/query';
 import {
   pluginId,
+  problemColumns,
   normalizeMinimumRole,
   type Comment,
   type Detail,
@@ -82,7 +83,7 @@ function validPolicyDoc(value: unknown): boolean {
       !(value.defaultWorkflow === null || typeof value.defaultWorkflow === 'string') || !isRecord(value.views) ||
       !['1h', '24h', '7d', '30d'].includes(String(value.views.recent)) ||
       !['1h', '24h', '7d', '30d'].includes(String(value.views.history)) || !Array.isArray(value.views.columns) ||
-      value.views.columns.length === 0 || value.views.columns.some((column) => !['level', 'name', 'status', 'started', 'duration', 'owner', 'ack'].includes(column)) ||
+      value.views.columns.length === 0 || value.views.columns.some((column) => !problemColumns.some((known) => known === column)) ||
       !isRecord(value.source) || !Number.isInteger(value.source.recoveredTrustMinutes)) return false;
   return value.workflows.every((workflow) => isRecord(workflow) && typeof workflow.id === 'string' && validName(workflow.name) && normalizeMinimumRole(workflow.minimumRole) !== undefined &&
     typeof workflow.initialState === 'string' && validRequires(workflow.startRequires) && Array.isArray(workflow.states) &&
