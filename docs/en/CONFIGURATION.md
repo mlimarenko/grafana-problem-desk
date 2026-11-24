@@ -36,11 +36,11 @@ Workflow identity and level classification are evaluation metadata. They never c
 
 **Problems** always lists every active episode. **Recent** adds episodes recovered within the selected window. **History** lists episodes overlapping the selected window. The organization policy supplies the default Recent and History windows (0.2 defaults: 24 hours and 7 days); members can still choose another bounded window in the page, and an explicit choice in the address overrides the default. Table columns also come from the policy and are bounded to the existing set.
 
-## Upgrade from 0.2
+## Database upgrades
 
-Episodes, comments, acknowledgements, owner labels and activity recorded by 0.1.0 and 0.2 remain available after the upgrade. The schema migration is additive; legacy episodes stay untracked until an operator explicitly starts a workflow, and no synthetic completion, approval or level change is invented. Back up `PROBLEMDESK_DATA_PATH` with an online backup before upgrading, as for any release.
+Take an online SQLite backup of `problemdesk.db` in `PROBLEMDESK_DATA_PATH` before upgrading. Schema 3 removes the two tables used for the published participant list. Episode owners, ACKs, comments, events, policies and workflow states are preserved. Existing episodes without a workflow stay untracked.
 
-A 0.2 binary cannot enforce 0.3 workflow gates, so downgrade is not a safe rollback. To recover from a bad configuration, write an earlier document as a new revision (rollback-forward) and keep the human workflow actions recorded since the upgrade. Restoring the pre-upgrade backup is a named disaster path that discards those actions and requires explicit operator acknowledgement.
+Older binaries cannot open schema 3. Restoring a pre-upgrade backup with the old plugin discards any actions recorded after the backup. For a policy change, save the previous policy as a new revision instead of restoring the database.
 
 ## Language
 
@@ -48,13 +48,8 @@ There is no server-side language setting. Each member switches the interface bet
 
 ## Access
 
-Viewers read the workspace and the active policy explanation. Editors and administrators comment, acknowledge, remove acknowledgement, set the owner label and start or advance an episode workflow when the policy allows it. Administrators also run manual source sync, change the source configuration and edit the organization policy. The plugin does not delete episodes, comments or activity records.
+Viewers read episodes and history. Editors and Admins can claim an unassigned episode, release their own assignment, comment, acknowledge and use workflows as the organization policy permits. No assignee directory needs configuring.
 
-Before participants can be newly assigned, an Admin publishes the assignee list
-with **Update participants** on the Problem Desk page. Repeat after organization
-membership changes. This uses the administrator's native Grafana session, not
-the alert source token. Editors can read the published list and assign from it;
-Viewers cannot read the directory or change assignments. See
-[assignee selection](USAGE.md) for refresh errors and existing assignments.
+Admins also configure the source, run a manual sync and edit the organization policy.
 
 See [installation](INSTALL.md) for the unsigned-plugin setting and [security](SECURITY.md) for operational precautions.

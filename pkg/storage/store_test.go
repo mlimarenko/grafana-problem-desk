@@ -54,10 +54,7 @@ func TestStorePersistenceAfterReopen(t *testing.T) {
 	if _, err := store1.AcknowledgeProblem(ctx, orgID, probID, "admin", "acknowledged disk issue"); err != nil {
 		t.Fatalf("failed to ack problem: %v", err)
 	}
-	if _, err := store1.PutAssignees(ctx, orgID, "admin", 0, []models.AssigneeMember{{UID: "alice", Login: "alice"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store1.AssignProblem(ctx, orgID, probID, "admin", "alice"); err != nil {
+	if _, err := store1.ChangeOwnership(ctx, orgID, probID, "alice", true); err != nil {
 		t.Fatalf("failed to assign problem: %v", err)
 	}
 
@@ -188,7 +185,7 @@ func TestCrossOrgReadWriteIsolation(t *testing.T) {
 	}
 
 	// 6. Cross-org assign: Org2 must get ErrNotFound
-	if _, err := store.AssignProblem(ctx, org2, probID, "attacker", "evil"); err != storage.ErrNotFound {
+	if _, err := store.ChangeOwnership(ctx, org2, probID, "attacker", true); err != storage.ErrNotFound {
 		t.Fatalf("expected ErrNotFound for cross-org AssignProblem, got %v", err)
 	}
 }

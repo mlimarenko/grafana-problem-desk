@@ -35,10 +35,10 @@ func TestOperatorMutationRollback(t *testing.T) {
 			return err
 		}},
 		{"owner event failure", "events", func(ctx context.Context, s *Store, id string) error {
-			_, err := s.AssignProblem(ctx, 1, id, "first-operator", "old-owner")
+			_, err := s.ChangeOwnership(ctx, 1, id, "first-operator", true)
 			return err
 		}, func(ctx context.Context, s *Store, id string) error {
-			_, err := s.AssignProblem(ctx, 1, id, "second-operator", "new-owner")
+			_, err := s.ChangeOwnership(ctx, 1, id, "first-operator", false)
 			return err
 		}},
 	}
@@ -59,9 +59,6 @@ func TestOperatorMutationRollback(t *testing.T) {
 				t.Fatalf("fixture not created: %v", err)
 			}
 			id := problems[0].ID
-			if _, err := store.PutAssignees(ctx, 1, "admin", 0, []models.AssigneeMember{{UID: "old", Login: "old-owner"}, {UID: "new", Login: "new-owner"}}); err != nil {
-				t.Fatal(err)
-			}
 			if tc.prepare != nil {
 				if err := tc.prepare(ctx, store, id); err != nil {
 					t.Fatal(err)

@@ -124,8 +124,8 @@ func TestLegacyV02MigrationPreservesRowsAndBackfillsLevel(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("user_version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("user_version = %d, want 3", version)
 	}
 
 	expectedLevels := map[string]string{"p-warning": "warning", "p-critical": "critical", "p-none": "unknown"}
@@ -177,7 +177,7 @@ func TestLegacyV02MigrationPreservesRowsAndBackfillsLevel(t *testing.T) {
 		t.Fatalf("reopen migrated database: %v", err)
 	}
 	defer reopened.Close()
-	if err := reopened.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := reopened.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
 		t.Fatalf("version after reopen = %d, %v", version, err)
 	}
 	problem, err := reopened.GetProblemByID(ctx, 1, "p-warning")
@@ -196,7 +196,7 @@ func TestFutureSchemaVersionFailsClosed(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE problems (id TEXT PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`PRAGMA user_version = 3`); err != nil {
+	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -213,7 +213,7 @@ func TestFutureSchemaVersionFailsClosed(t *testing.T) {
 	}
 	defer check.Close()
 	var version int
-	if err := check.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
+	if err := check.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 4 {
 		t.Fatalf("future version changed to %d, %v", version, err)
 	}
 	var tables int
@@ -237,7 +237,7 @@ func TestSchemaOneCatalogMigrationPreservesHumanData(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := problemSnapshot(t, s.db, "p-warning")
-	if _, err = s.db.Exec(`DROP TABLE assignee_members; DROP TABLE assignee_catalogs; PRAGMA user_version = 1`); err != nil {
+	if _, err = s.db.Exec(`PRAGMA user_version = 1`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Close(); err != nil {
@@ -259,7 +259,48 @@ func TestSchemaOneCatalogMigrationPreservesHumanData(t *testing.T) {
 	if err != nil || len(events) != 2 {
 		t.Fatalf("events: %+v %v", events, err)
 	}
-	if c, err := s.GetAssignees(ctx, 1); err != nil || c.Revision != 0 || len(c.Members) != 0 {
-		t.Fatalf("catalog: %+v %v", c, err)
+}
+
+func TestSchemaTwoRemovesCatalogPreservingAssignmentAndHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "schema2.db")
+	legacy := openLegacyDatabase(t, path)
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := problemSnapshot(t, s.db, "p-warning")
+	if _, err := s.db.Exec(`CREATE TABLE assignee_catalogs (org_id INTEGER PRIMARY KEY);
+		CREATE TABLE assignee_members (org_id INTEGER, login TEXT);
+		INSERT INTO assignee_catalogs VALUES (1);
+		INSERT INTO assignee_members VALUES (1, 'bob');
+		INSERT INTO events (id, org_id, problem_id, kind, author, created_at, body)
+		VALUES ('assign-old', 1, 'p-warning', 'assign', 'alice', '2026-01-02T01:00:00Z', 'Assigned to bob');
+		PRAGMA user_version = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if after := problemSnapshot(t, s.db, "p-warning"); after != before {
+		t.Fatalf("problem changed: %s", after)
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('assignee_catalogs', 'assignee_members')`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("catalog tables: %d %v", count, err)
+	}
+	events, err := s.GetEvents(context.Background(), 1, "p-warning")
+	if err != nil || len(events) != 3 {
+		t.Fatalf("events: %+v %v", events, err)
+	}
+	if _, err := s.ChangeOwnership(context.Background(), 1, "p-warning", "alice", false); err != ErrAssignmentConflict {
+		t.Fatalf("legacy owner released by another user: %v", err)
 	}
 }

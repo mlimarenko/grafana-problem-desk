@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activityContent,
   assignmentTarget,
   classifyError,
   elapsedMs,
@@ -12,6 +13,7 @@ import {
   targetName,
   type Problem,
   type Level,
+  type PolicyWorkflow,
 } from './model';
 
 const example: Problem = {
@@ -85,6 +87,23 @@ describe('problem presentation', () => {
     expect(activity[0].kind).toBe('assign');
     expect(assignmentTarget(activity[0].body ?? '')).toBe('team-a');
     expect(assignmentTarget('Assignment cleared')).toBeUndefined();
+  });
+
+  it('shows workflow changes in the chosen language without rewriting a comment or an unknown event', () => {
+    const workflows: PolicyWorkflow[] = [{
+      id: 'basic', name: { en: 'Basic', ru: 'Базовый' }, initialState: 'new', minimumRole: 'editor', startRequires: {},
+      states: [
+        { id: 'new', rank: 0, name: { en: 'New', ru: 'Новый' } },
+        { id: 'in_progress', rank: 1, name: { en: 'In progress', ru: 'В работе' } },
+      ], transitions: [],
+    }];
+    const event = { id: 'e', at: '', author: 'anna', kind: 'event' as const, eventKind: 'workflow_transition', body: 'Workflow basic moved from new to in_progress' };
+    expect(activityContent(event, 'ru', workflows)).toEqual({ text: 'Базовый: Новый → В работе' });
+    expect(activityContent(event, 'en')).toEqual({ text: 'basic: new → in_progress' });
+    expect(activityContent({ ...event, eventKind: 'workflow_start', body: 'Workflow basic started in state new' }, 'en', workflows))
+      .toEqual({ text: 'Started Basic: New' });
+    expect(activityContent({ ...event, kind: 'comment' }, 'ru', workflows)).toEqual({ text: '', body: event.body });
+    expect(activityContent({ ...event, body: 'Another audit format' }, 'ru', workflows).body).toBe('Another audit format');
   });
 
   it('does not create executable or credential-bearing links from alert input', () => {

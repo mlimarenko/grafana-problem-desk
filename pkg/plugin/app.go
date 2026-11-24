@@ -163,29 +163,10 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 	if cleanPath == "policy" || strings.HasPrefix(cleanPath, "policy/") {
 		bodyLimit = maxPolicyRequestBodyBytes
 	}
-	if cleanPath == "assignees" && req.Method == http.MethodPut {
-		bodyLimit = 4 * 1024 * 1024
-	}
 	if len(req.Body) > bodyLimit {
 		return sendJSON(sender, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("request body exceeds maximum limit of %dKiB", bodyLimit/1024)})
 	}
 
-	if cleanPath == "assignees" {
-		if role == "viewer" {
-			return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "editor role required"})
-		}
-		switch req.Method {
-		case http.MethodGet:
-			return a.handleGetAssignees(ctx, pc.OrgID, sender)
-		case http.MethodPut:
-			if role != "admin" {
-				return sendJSON(sender, http.StatusForbidden, map[string]string{"error": "admin role required"})
-			}
-			return a.handlePutAssignees(ctx, pc.OrgID, actor, req, sender)
-		default:
-			return sendJSON(sender, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		}
-	}
 	// 5. Organization policy routes
 	if cleanPath == "policy" {
 		switch req.Method {
@@ -315,8 +296,8 @@ func (a *App) CallResource(ctx context.Context, req *backend.CallResourceRequest
 			return a.handleAck(ctx, pc.OrgID, problemID, actor, req, sender)
 		case "unack":
 			return a.handleUnack(ctx, pc.OrgID, problemID, actor, req, sender)
-		case "assign":
-			return a.handleAssign(ctx, pc.OrgID, problemID, actor, req, sender)
+		case "claim", "release":
+			return a.handleOwnership(ctx, pc.OrgID, problemID, actor, action == "claim", req, sender)
 		default:
 			return sendJSON(sender, http.StatusNotFound, map[string]string{"error": "endpoint not found"})
 		}
@@ -452,30 +433,16 @@ func (a *App) handleUnack(ctx context.Context, orgID int64, problemID, actor str
 	return sendJSON(sender, http.StatusOK, problem)
 }
 
-func (a *App) handleAssign(ctx context.Context, orgID int64, problemID, actor string, req *backend.CallResourceRequest, sender backend.CallResourceResponseSender) error {
-	if !checkContentTypeJSON(req) {
-		return sendJSON(sender, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
+func (a *App) handleOwnership(ctx context.Context, orgID int64, problemID, actor string, claim bool, req *backend.CallResourceRequest, sender backend.CallResourceResponseSender) error {
+	if len(req.Body) != 0 {
+		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "request body must be empty"})
 	}
-
-	if !validAssigneeJSONUnicode(req.Body) {
-		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "invalid json payload"})
-	}
-	var payload models.AssignRequest
-	if err := decodeJSONStrict(req.Body, &payload); err != nil {
-		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid json payload: %v", err)})
-	}
-
-	assignee := payload.Assignee
-	if len(assignee) > 255 {
-		return sendJSON(sender, http.StatusBadRequest, map[string]string{"error": "assignee exceeds maximum 255 characters"})
-	}
-
-	problem, err := a.store.AssignProblem(ctx, orgID, problemID, actor, assignee)
+	problem, err := a.store.ChangeOwnership(ctx, orgID, problemID, actor, claim)
 	if errors.Is(err, storage.ErrNotFound) {
 		return sendJSON(sender, http.StatusNotFound, map[string]string{"error": "problem not found"})
 	}
-	if errors.Is(err, storage.ErrAssigneeUnavailable) {
-		return sendJSON(sender, http.StatusUnprocessableEntity, map[string]string{"error": "assignee_unavailable"})
+	if errors.Is(err, storage.ErrAssignmentConflict) {
+		return sendJSON(sender, http.StatusConflict, map[string]string{"error": "assignment_conflict"})
 	}
 	if err != nil {
 		return sendJSON(sender, http.StatusInternalServerError, map[string]string{"error": "failed to assign problem"})

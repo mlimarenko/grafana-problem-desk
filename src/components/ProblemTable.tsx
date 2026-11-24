@@ -7,17 +7,16 @@ import {
   isAcknowledged,
   problemTitle,
   levelDisplay,
-  levelColor,
   problemColumns,
   targetMetadata,
   targetName,
   type Problem,
-  type LevelTone,
   type PolicyColumn,
 } from '../model';
 import { useI18n } from '../i18n';
 import { sortByColumn } from '../lib/query';
 import { columnLabels, ProblemColumnFilter, type ColumnFilterProps } from './ProblemColumnFilter';
+import { ProblemStatus, SeverityBadge } from './ProblemIndicators';
 
 interface Props extends ColumnFilterProps {
   problems: Problem[];
@@ -29,7 +28,7 @@ interface Props extends ColumnFilterProps {
 }
 
 const columnWidths: Record<PolicyColumn, number> = {
-  level: 132, name: 190, status: 125, started: 139, duration: 148, owner: 157, ack: 159,
+  level: 132, name: 171, status: 144, started: 139, duration: 148, owner: 157, ack: 159,
 };
 
 export function ProblemTable({ problems, selectedId, now, severityKey, columns, onOpen, ...filters }: Props) {
@@ -91,21 +90,7 @@ export function ProblemTable({ problems, selectedId, now, severityKey, columns, 
                 data-testid="problem-row"
               >
                 {columns.includes('level') && <td>
-                  <span className={styles.severityBadge(severity.tone)}>
-                    <Icon
-                      name={
-                         severity.tone === 'red'
-                          ? 'exclamation-triangle'
-                           : severity.tone === 'orange' || severity.tone === 'yellow'
-                            ? 'exclamation-circle'
-                             : severity.tone === 'blue'
-                              ? 'info-circle'
-                              : 'circle'
-                      }
-                      size="sm"
-                    />
-                    {severity.label}
-                  </span>
+                  <SeverityBadge {...severity} />
                 </td>}
                 {columns.includes('name') && <td>
                   <button
@@ -133,12 +118,11 @@ export function ProblemTable({ problems, selectedId, now, severityKey, columns, 
                   </div>
                 </td>}
                 {columns.includes('status') && <td>
-                  <span className={styles.statusBadge(problem.status)}>
-                    <span className={styles.statusDot(problem.status)} />
-                    {problem.status === 'active' ? m.status.active : m.status.recovered}
-                  </span>
+                  <ProblemStatus status={problem.status} />
                   {problem.status === 'recovered' && problem.endsAt && (
-                    <div className={styles.secondary}>{m.table.recoveredAt(formatRelative(problem.endsAt, now))}</div>
+                    <time className={styles.secondary} dateTime={problem.endsAt} title={formatDate(problem.endsAt)}>
+                      {formatRelative(problem.endsAt, now)}
+                    </time>
                   )}
                 </td>}
                 {columns.includes('started') && <td>
@@ -149,7 +133,7 @@ export function ProblemTable({ problems, selectedId, now, severityKey, columns, 
                 </td>}
                 {columns.includes('duration') && <td className={styles.duration}>{duration === undefined ? '—' : formatDuration(duration)}</td>}
                 {columns.includes('owner') && <td>
-                  <span className={problem.assignee ? styles.owner : styles.unassigned}>
+                  <span className={problem.assignee ? undefined : styles.muted}>
                     {problem.assignee || m.filters.unassigned}
                   </span>
                 </td>}
@@ -190,6 +174,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
       border-bottom: 1px solid ${theme.colors.border.weak};
       text-align: left;
       vertical-align: top;
+    }
+    td {
+      overflow-wrap: anywhere;
     }
     th {
       position: sticky;
@@ -301,49 +288,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: ${theme.colors.text.secondary};
   `,
   secondary: css`
+    display: block;
     color: ${theme.colors.text.secondary};
     font-size: ${theme.typography.bodySmall.fontSize};
     margin-top: 2px;
-    white-space: nowrap;
   `,
   started: css`
     font-variant-numeric: tabular-nums;
   `,
   duration: css`
-    white-space: nowrap;
     font-variant-numeric: tabular-nums;
-  `,
-  severityBadge: (tone: LevelTone) => css`
-    display: inline-flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    padding: 2px ${theme.spacing(1)};
-    border: 1px solid ${levelColor(theme, tone)};
-    border-radius: ${theme.shape.radius.default};
-    color: ${levelColor(theme, tone)};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    overflow-wrap: anywhere;
-    font-weight: ${theme.typography.fontWeightMedium};
-  `,
-  statusBadge: (status: Problem['status']) => css`
-    display: inline-flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    color: ${status === 'active' ? theme.colors.error.text : theme.colors.success.text};
-    font-weight: ${theme.typography.fontWeightMedium};
-    white-space: nowrap;
-  `,
-  statusDot: (status: Problem['status']) => css`
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: ${status === 'active' ? theme.colors.error.main : theme.colors.success.main};
-  `,
-  owner: css`
-    overflow-wrap: anywhere;
-  `,
-  unassigned: css`
-    color: ${theme.colors.text.secondary};
   `,
   ackBadge: css`
     display: inline-flex;
@@ -354,7 +308,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   ackAuthor: css`
     color: ${theme.colors.text.secondary};
-    overflow-wrap: anywhere;
   `,
   muted: css`
     color: ${theme.colors.text.secondary};

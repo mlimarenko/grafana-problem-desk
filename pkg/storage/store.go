@@ -17,12 +17,13 @@ import (
 	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 )
 
-// supportedSchemaVersion is the newest additive schema this build understands.
-const supportedSchemaVersion = 2
+// supportedSchemaVersion is the newest schema this build understands.
+const supportedSchemaVersion = 3
 
 var (
 	// ErrNotFound is returned when an episode is not found for the requested org_id.
-	ErrNotFound = errors.New("problem not found")
+	ErrNotFound           = errors.New("problem not found")
+	ErrAssignmentConflict = errors.New("assignment conflict")
 )
 
 // Store provides persistence for Problem Desk in pure-Go SQLite.
@@ -241,8 +242,10 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("failed to index level ids: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, assigneeSchema); err != nil {
-		return fmt.Errorf("failed to create assignee catalog: %w", err)
+	if version == 2 {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE assignee_members; DROP TABLE assignee_catalogs"); err != nil {
+			return fmt.Errorf("failed to remove assignee catalog: %w", err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", supportedSchemaVersion)); err != nil {
 		return fmt.Errorf("failed to record schema version: %w", err)
@@ -290,6 +293,12 @@ func ensureColumn(ctx context.Context, tx *sql.Tx, table, column, definition str
 
 // GetProblemByID loads a single problem by ID, strictly enforcing org_id scoping.
 func (s *Store) GetProblemByID(ctx context.Context, orgID int64, id string) (*models.Problem, error) {
+	return getProblemByID(ctx, s.db, orgID, id)
+}
+
+func getProblemByID(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, orgID int64, id string) (*models.Problem, error) {
 	query := `
 		SELECT id, fingerprint, starts_at, ends_at, status, labels, annotations,
 		       generator_url, acknowledged_by, acknowledged_at, assignee, last_seen_at,
@@ -300,7 +309,7 @@ func (s *Store) GetProblemByID(ctx context.Context, orgID int64, id string) (*mo
 	var p models.Problem
 	var labelsJSON, annotationsJSON string
 	var workflowID, stateID sql.NullString
-	err := s.db.QueryRowContext(ctx, query, orgID, id).Scan(
+	err := db.QueryRowContext(ctx, query, orgID, id).Scan(
 		&p.ID,
 		&p.Fingerprint,
 		&p.StartsAt,
@@ -518,64 +527,38 @@ func (s *Store) UnacknowledgeProblem(ctx context.Context, orgID int64, problemID
 	return p, nil
 }
 
-// AssignProblem updates the assignee and records an audit event.
-func (s *Store) AssignProblem(ctx context.Context, orgID int64, problemID, author, assignee string) (*models.Problem, error) {
-	p, err := s.GetProblemByID(ctx, orgID, problemID)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to begin assignment: %w", err)
-	}
-	defer tx.Rollback()
-	var current string
-	if err := tx.QueryRowContext(ctx, `SELECT assignee FROM problems WHERE org_id = ? AND id = ?`, orgID, problemID).Scan(&current); errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	} else if err != nil {
-		return nil, err
-	}
-	if current == assignee {
-		p.Assignee = current
-		return p, nil
-	}
-	if assignee != "" {
-		var exists int
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM assignee_members WHERE org_id = ? AND login = ?)`, orgID, assignee).Scan(&exists); err != nil {
-			return nil, err
-		} else if exists == 0 {
-			return nil, ErrAssigneeUnavailable
+// ChangeOwnership atomically claims an unassigned problem or releases the actor's own.
+func (s *Store) ChangeOwnership(ctx context.Context, orgID int64, problemID, actor string, claim bool) (*models.Problem, error) {
+	var problem *models.Problem
+	err := s.withImmediate(ctx, func(tx *sql.Conn) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, `SELECT assignee FROM problems WHERE org_id = ? AND id = ?`, orgID, problemID).Scan(&current); errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
 		}
+		if (claim && current != "") || (!claim && current != actor) {
+			return ErrAssignmentConflict
+		}
+		value, body := "", "Assignment cleared"
+		if claim {
+			value, body = actor, fmt.Sprintf("Assigned to %s", actor)
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, err := tx.ExecContext(ctx, `UPDATE problems SET assignee = ?, updated_at = ? WHERE org_id = ? AND id = ?`, value, now, orgID, problemID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO events (id, org_id, problem_id, kind, author, created_at, body) VALUES (?, ?, ?, 'assign', ?, ?, ?)`, uuid.New().String(), orgID, problemID, actor, now, body); err != nil {
+			return err
+		}
+		var err error
+		problem, err = getProblemByID(ctx, tx, orgID, problemID)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	updateSQL := `
-		UPDATE problems
-		SET assignee = ?, updated_at = ?
-		WHERE org_id = ? AND id = ?
-	`
-	if _, err := tx.ExecContext(ctx, updateSQL, assignee, now, orgID, problemID); err != nil {
-		return nil, fmt.Errorf("failed to assign problem: %w", err)
-	}
-
-	eventID := uuid.New().String()
-	body := fmt.Sprintf("Assigned to %s", assignee)
-	if assignee == "" {
-		body = "Assignment cleared"
-	}
-	insertEvent := `
-		INSERT INTO events (id, org_id, problem_id, kind, author, created_at, body)
-		VALUES (?, ?, ?, 'assign', ?, ?, ?)
-	`
-	if _, err := tx.ExecContext(ctx, insertEvent, eventID, orgID, problemID, author, now, body); err != nil {
-		return nil, fmt.Errorf("failed to record assign event: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit assignment: %w", err)
-	}
-	p.Assignee = assignee
-	return p, nil
+	return problem, nil
 }
 
 // GetSyncStatus retrieves the last successful sync time and last error for org_id.

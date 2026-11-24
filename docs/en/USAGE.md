@@ -18,7 +18,7 @@ The Recent and History windows are chosen above the list with bounded start and 
 
 Use the filter icon in a column header to narrow the list. The Problem column filters by title and by host; Started and Duration accept one or two bounds. The Owner column filters by exact owner or by whether an owner is assigned. The Status filter is available in Recent and History; Problems always shows active episodes.
 
-**More filters** contains workflow, operator state, exact labels, and filters for columns hidden by the organization policy. The search field searches fingerprints, labels and annotations. To filter on the original source severity rather than the configured importance level, use its exact label.
+**Filters** contains workflow, workflow state, exact labels, and filters for hidden columns. The search field searches fingerprints, labels and annotations. To filter on the source severity, use its exact `severity` label.
 
 Changing a filter, a window or the sort order returns the list to its first page. The address bar keeps the selected episode, so a link opens the same inspector for another member of the organization.
 
@@ -36,45 +36,25 @@ are reported rather than selecting an arbitrary problem.
 
 ## Counters, sorting and paging
 
-The backend filters and sorts the whole selection before paging. Nonzero counters above the table describe all matching episodes. Host, owner and label suggestions come from the current tab.
+The backend filters and sorts the whole selection before paging. The total is below the table. Turn on **View → Summary** to see the breakdown by status and severity.
 
 Select any heading to sort by that column; select it again to reverse the order. In Recent and History, the Status menu also offers sorting by recovery time. Duration runs from start to recovery, or to the current time for an active episode. Page size is 25, 50 or 100 rows. The organization policy supplies the default Recent and History windows and the visible columns; an explicit window in the address overrides the default.
 
-## Inspector
+## Episode details
 
-Select a problem title to open the inspector. It has four parts.
+Select the problem title in the table. The drawer shows the host, status, description and comments.
 
-- **Summary**: source state, importance level, target, start time, last seen time, recovery time, owner label and acknowledgement, with the acknowledging user and time.
-- **Labels and annotations**: values exactly as Grafana Alerting delivered them. They are never translated or rewritten; only the owner label belongs to Problem Desk.
-- **Workflow**: the pinned process and its current state, the transitions the organization policy allows, and the requirements still missing. An episode starts untracked; start it explicitly to opt into a process. Workflow actions never change the source `active`/`recovered` state. If the source becomes active again while the workflow is complete, the inspector shows the conflict and offers the configured reopen transition.
-- **Discussion**: a plain-text comment form that preserves literal characters.
-- **Activity**: comments and operator events in one newest-first timeline, including acknowledgement, removed acknowledgement, owner changes, recovery, workflow start and workflow transitions. Every entry retains its author, timestamp and the policy revision used.
+- Select **Assign to me** to claim an unassigned episode. **Release** clears only your own assignment.
+- **Acknowledge** records that you have seen the problem. Notifications continue. Select **Undo** next to the acknowledgement to remove it.
+- Write a comment and select **Send**. Comments appear newest first.
 
-The target line prefers the alert's host metadata over an address. The generator link opens the Grafana source only when it is a valid `http` or `https` URL. Displayed times use the browser's timezone.
+In **More**, you can open the **Alert rule**, copy the link and turn on extra sections:
 
-Use **Export page CSV** to download the currently loaded page, not the full
-filtered result. Values that could be interpreted as spreadsheet formulas are
-escaped on export. The time-zone control switches between local time and UTC.
+- **Workflow** shows the steps allowed by the organization policy
+- **Activity log** adds acknowledgements, assignments and workflow steps to the comments
+- **Alert details** shows severity, times, ID, labels and annotations
 
-## Work with an episode
-
-1. Choose a tab and narrow the list with filters.
-2. Select the problem title. The inspector replaces the previous selection; unsent comment text is confirmed before it is discarded.
-3. Write in the comment field and add the comment.
-4. Select **Acknowledge** when the problem has been seen. **Remove acknowledgement** records a separate activity event.
-5. Choose an **Assignee** from the searchable participant list and save. Search by name or login; clear the selection to unassign. Assignment does not create a user or grant permissions.
-
-An organization administrator publishes the list with **Update participants**.
-This reads the current organization's users through the administrator's Grafana
-session, excludes disabled users and stores only their UID, login and name.
-Editors use that published snapshot without directory-reading privileges.
-The picker shows when it was updated. Ask an administrator to refresh it when
-membership changes or before the first assignment.
-
-Existing assignments remain visible even when their value is absent from the
-published list. They are not offered as new choices for other episodes. A failed
-refresh keeps the previous list; a removed choice cannot be newly assigned.
-6. Open the **Workflow** section to start the process selected by the organization policy, or to advance the pinned process. When a routing rule or default selects a process, that process is fixed and cannot be replaced from the drawer. The inspector lists the allowed next states, the minimum role and the acknowledgement, owner, comment or recovered-source requirements still unmet. Admin-only actions are disabled for Editors. A transition that requires a comment stores the comment with the transition. If another operator or a policy edit changed the case after the drawer loaded, the action is rejected as stale and the drawer refreshes instead of retrying silently.
+Your browser remembers the display options. They do not change any records. **Export page CSV** exports the current filtered page and escapes values that might be interpreted as spreadsheet formulas.
 
 A recovered episode keeps its discussion and activity. A later occurrence of the same alert is a separate episode with its own discussion and acknowledgement. There are no bulk actions; change one episode at a time.
 
@@ -84,16 +64,16 @@ Administrators edit the organization policy in the app configuration page. Level
 
 Routing rules use exact label values only. There are no scripts, regular expressions, webhooks or metric thresholds. The policy cannot grant Viewer writes or change Grafana authorization.
 
-## Language
+## Language and time
 
-The page header has a Russian and English switch. The choice is stored in this browser and survives reloads; the first visit follows the Grafana or browser language. The switch translates the plugin interface only: alert labels, annotations, comments and owner values remain as entered.
+Use **View** to choose the interface language and local time or UTC. The initial language follows Grafana or the browser. Alert text and comments are not translated.
 
 ## Roles
 
 | Role | Permitted |
 | --- | --- |
 | Viewer | Read episodes, discussion, activity and policy explanations. |
-| Editor | Everything a Viewer can do, plus comment, acknowledge, remove acknowledgement, set the owner label and start or advance an episode workflow when the policy allows it. |
+| Editor | Comment, acknowledge, claim an unassigned episode, release their own assignment and run workflows within the organization policy. |
 | Admin | Everything an Editor can do, plus manual source sync, app configuration and organization policy editing. |
 
 ## Boundaries

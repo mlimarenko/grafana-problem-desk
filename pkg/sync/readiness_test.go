@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mlimarenko/grafana-problem-desk/pkg/models"
 	"github.com/mlimarenko/grafana-problem-desk/pkg/storage"
 	problemsync "github.com/mlimarenko/grafana-problem-desk/pkg/sync"
 )
@@ -33,10 +32,7 @@ func TestReadinessProtectsExistingEpisode(t *testing.T) {
 	if _, err := store.AcknowledgeProblem(ctx, 1, id, "operator", "note"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutAssignees(ctx, 1, "admin", 0, []models.AssigneeMember{{UID: "owner", Login: "owner"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AssignProblem(ctx, 1, id, "operator", "owner"); err != nil {
+	if _, err := store.ChangeOwnership(ctx, 1, id, "owner", true); err != nil {
 		t.Fatal(err)
 	}
 	inventory := `{"folder":[{"name":"group","rules":[{"grafana_alert":{"uid":"rule","is_paused":false,"updated":"2026-11-09T00:00:00Z"}}]}]}`

@@ -1,11 +1,4 @@
 import { getBackendSrv } from '@grafana/runtime';
-import {
-  ParticipantsError,
-  parseCatalog,
-  participantsFromRows,
-  type AssigneeCatalog,
-  type AssigneeMember,
-} from './lib/assignees';
 import type { ResolveRequest } from './lib/deeplink';
 import { buildProblemsRequest, type WorkspaceQuery } from './lib/query';
 import {
@@ -297,60 +290,25 @@ export async function postUnack(problemId: string): Promise<Problem> {
   return getBackendSrv().post<Problem>(`${resource}/problems/${encodeURIComponent(problemId)}/unack`, {}, requestOptions);
 }
 
-export async function postAssign(problemId: string, assignee: string): Promise<Problem> {
-  return getBackendSrv().post<Problem>(`${resource}/problems/${encodeURIComponent(problemId)}/assign`, { assignee }, requestOptions);
+async function ownershipMutation(problemId: string, action: 'claim' | 'release'): Promise<Problem> {
+  const value = await getBackendSrv().post<unknown>(`${resource}/problems/${encodeURIComponent(problemId)}/${action}`, undefined, requestOptions);
+  const problem = normalizeProblem(value);
+  if (!problem) {
+    throw new Error('invalid problem response');
+  }
+  return problem;
 }
 
-export async function fetchAssignees(): Promise<AssigneeCatalog> {
-  return parseCatalog(await getBackendSrv().get<unknown>(`${resource}/assignees`, undefined, undefined, requestOptions));
+export function postClaim(problemId: string): Promise<Problem> {
+  return ownershipMutation(problemId, 'claim');
 }
 
-function participantsFailure(error: unknown): ParticipantsError {
-  if (error instanceof ParticipantsError) {
-    return error;
-  }
-  const status = errorStatus(error);
-  if (status === 403) {
-    return new ParticipantsError('forbidden');
-  }
-  if (status === 409) {
-    return new ParticipantsError('conflict');
-  }
-  if (status === 400 || status === 413 || status === 422) {
-    return new ParticipantsError('malformed');
-  }
-  return new ParticipantsError('unavailable');
+export function postRelease(problemId: string): Promise<Problem> {
+  return ownershipMutation(problemId, 'release');
 }
 
-export async function updateParticipants(orgId: number, baseRevision: number): Promise<AssigneeCatalog> {
-  if (!Number.isSafeInteger(orgId) || orgId <= 0 || !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
-    throw new ParticipantsError('org-mismatch');
-  }
-  let org: unknown;
-  try {
-    org = await getBackendSrv().get<unknown>('/api/org', undefined, undefined, requestOptions);
-  } catch (error) {
-    throw participantsFailure(error);
-  }
-  if (!isRecord(org) || !Number.isInteger(org.id)) {
-    throw new ParticipantsError('malformed');
-  }
-  if (org.id !== orgId) {
-    throw new ParticipantsError('org-mismatch');
-  }
-  let rows: unknown;
-  try {
-    rows = await getBackendSrv().get<unknown>('/api/org/users', undefined, undefined, requestOptions);
-  } catch (error) {
-    throw participantsFailure(error);
-  }
-  const members: AssigneeMember[] = participantsFromRows(rows, orgId);
-  try {
-    const value = await getBackendSrv().put<unknown>(`${resource}/assignees`, { orgId, baseRevision, members }, requestOptions);
-    return parseCatalog(value);
-  } catch (error) {
-    throw participantsFailure(error);
-  }
+export function isOwnershipConflict(error: unknown): boolean {
+  return errorStatus(error) === 409;
 }
 
 export async function postSync(): Promise<void> {

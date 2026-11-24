@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+- Operators can claim an unassigned episode or release their own. The participant directory is no longer needed. Existing owners, comments and activity are preserved when upgrading to SQLite schema 3.
+- The episode drawer shows the assignee, acknowledgement and comments by default. Workflow, activity and alert details are optional, as is the table summary.
+- Package release artifacts with the selected release version in the plugin manifest and ZIP name.
+
 ## 0.3.2
 
 - Package release artifacts with the selected release version in the plugin manifest and ZIP name.

@@ -121,7 +121,7 @@ func TestViewerDenialAllMutations(t *testing.T) {
 		},
 		{
 			name:   "assign",
-			path:   "problems/" + probID + "/assign",
+			path:   "problems/" + probID + "/claim",
 			body:   []byte(`{"assignee":"bob"}`),
 			header: jsonHeaders,
 		},
@@ -315,18 +315,15 @@ func TestEditorMutationsAndAdminSync(t *testing.T) {
 		t.Errorf("expected acknowledgedBy cleared, got %q", unackProblem.AcknowledgedBy)
 	}
 
-	// Editor can ASSIGN
-	if resp := call(app, http.MethodPut, "assignees", orgID, admin, []byte(`{"orgId":1,"baseRevision":0,"members":[{"uid":"u","login":"dev-oncall","name":""}]}`), jsonHeaders); resp.Status != http.StatusOK {
-		t.Fatalf("publish: %d", resp.Status)
-	}
-	respAssign := call(app, http.MethodPost, "problems/"+probID+"/assign", orgID, editor, []byte(`{"assignee":"dev-oncall"}`), jsonHeaders)
+	// Editor can claim the problem.
+	respAssign := call(app, http.MethodPost, "problems/"+probID+"/claim", orgID, editor, nil, nil)
 	if respAssign.Status != http.StatusOK {
 		t.Fatalf("expected 200 OK on ASSIGN by editor, got %d", respAssign.Status)
 	}
 	var assignProblem models.Problem
 	_ = json.Unmarshal(respAssign.Body, &assignProblem)
-	if assignProblem.Assignee != "dev-oncall" {
-		t.Errorf("expected assignee dev-oncall, got %q", assignProblem.Assignee)
+	if assignProblem.Assignee != "editor1" {
+		t.Errorf("expected assignee editor1, got %q", assignProblem.Assignee)
 	}
 
 	// Editor CANNOT sync (Admin only)

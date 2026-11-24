@@ -66,16 +66,14 @@ export interface Messages {
     localZone: (zone: string) => string;
     utc: string;
   };
-  participants: {
+  view: {
     title: string;
-    update: string;
-    updating: string;
-    hint: string;
-    updated: (count: number) => string;
-    errors: Record<
-      'forbidden' | 'org-mismatch' | 'malformed' | 'duplicate' | 'over-limit' | 'conflict' | 'invalid-response' | 'unavailable',
-      string
-    >;
+    more: string;
+    show: string;
+    summary: string;
+    actions: string;
+    details: string;
+    localTime: string;
   };
   tabs: {
     label: string;
@@ -168,7 +166,6 @@ export interface Messages {
     owner: string;
     ack: string;
     open: (name: string) => string;
-    recoveredAt: (time: string) => string;
     noTarget: string;
     emptyTarget: string;
     untitled: string;
@@ -178,7 +175,7 @@ export interface Messages {
     recovered: string;
   };
   workflow: {
-    title: string; untracked: string; select: string; choose: string; start: string; comment: string;
+    title: string; select: string; choose: string; start: string; comment: string;
     retired: string; conflict: string; error: string; stale: string; staleState: string; staleRevision: string; adminRequired: string; untrusted: string; missing: string;
     ack: string; owner: string; sourceRecovered: string;
   };
@@ -200,7 +197,6 @@ export interface Messages {
     never: string;
     staleTitle: string;
     staleBody: string;
-    updated: (value: string) => string;
   };
   errors: {
     forbidden: string;
@@ -237,54 +233,25 @@ export interface Messages {
   };
   drawer: {
     title: string;
-    close: string;
     sourceRule: string;
     copyLink: string;
     copyDone: string;
     copyFailed: string;
-    description: string;
-    noDescription: string;
     labels: string;
-    noLabels: string;
     annotations: string;
-    noAnnotations: string;
-    facts: {
-      state: string;
-      started: string;
-      recovered: string;
-      duration: string;
-      owner: string;
-      ack: string;
-      ackAt: string;
-      episode: string;
-    };
-    owner: string;
-    ownerPlaceholder: string;
-    ownerHint: string;
-    saveOwner: string;
-    saving: string;
-    assigneeLoading: string;
-    assigneeLoadFailed: string;
-    assigneeNotPublished: string;
-    assigneeEmpty: string;
-    assigneeLegacy: string;
-    assigneeSnapshot: (updated: string, actor: string) => string;
-    assigneeUnavailable: string;
-    assigneeUnavailableTitle: string;
-    assigneeNoOptions: string;
+    facts: { started: string; recovered: string; duration: string; episode: string };
+    claim: string;
+    release: string;
+    free: string;
+    ownerConflict: string;
     acknowledge: string;
     unacknowledge: string;
-    ackHint: string;
-    viewer: string;
+    undo: string;
     discardConfirm: string;
     activity: string;
-    activityNewest: string;
-    noActivity: string;
     comments: string;
-    noComments: string;
     commentPlaceholder: string;
     addComment: string;
-    commentLimit: (used: number, max: number) => string;
   };
   activity: {
     acknowledged: string;
@@ -292,6 +259,8 @@ export interface Messages {
     ownerSet: (name: string) => string;
     ownerCleared: string;
     comment: string;
+    claimed: string;
+    workflowStarted: (workflow: string, state: string) => string;
     unknownKind: (kind: string) => string;
   };
   csv: {
@@ -358,31 +327,18 @@ const en: Messages = {
   app: {
     title: 'Problem Desk',
     subtitle: 'Alert episodes and operator history',
-    configuration: 'Configuration',
+    configuration: 'Settings',
     refresh: 'Refresh',
-    syncSource: 'Sync source',
-    syncing: 'Syncing…',
+    syncSource: 'Load alerts',
+    syncing: 'Loading alerts…',
     language: 'Language',
     timeZone: 'Time zone',
     localZone: (zone) => `Local (${zone})`,
     utc: 'UTC',
   },
-  participants: {
-    title: 'Assignee participants',
-    update: 'Update participants',
-    updating: 'Updating…',
-    hint: 'The organization administrator publishes this snapshot from Grafana. It is the only source of assignee choices.',
-    updated: (count) => `Participant snapshot published: ${enCount(count, 'member', 'members')}.`,
-    errors: {
-      forbidden: 'The publication was rejected: the session is not an organization administrator, or the organization changed. Nothing was published.',
-      'org-mismatch': 'Grafana reports a different organization than this page. Nothing was published.',
-      malformed: 'The participant data is incomplete or malformed. Nothing was published.',
-      duplicate: 'The Grafana organization response contains duplicate members. Nothing was published.',
-      'over-limit': 'The participant list exceeds 5000 members. Nothing was published.',
-      conflict: 'Another administrator changed the participant snapshot. The current snapshot is being reloaded; choose Update participants again to publish this roster.',
-      'invalid-response': 'The server returned an invalid participant snapshot. The previous snapshot is kept.',
-      unavailable: 'Could not load the organization participants. The previous snapshot is kept.',
-    },
+  view: {
+    title: 'View', more: 'More', show: 'Show', summary: 'Summary',
+    actions: 'Activity log', details: 'Alert details', localTime: 'Local',
   },
   tabs: {
     label: 'Problem views',
@@ -417,7 +373,7 @@ const en: Messages = {
     severityAll: 'All severities',
     workflow: 'Workflow',
     workflowAll: 'All workflows',
-    workState: 'Operator state',
+    workState: 'Workflow state',
     workStateAll: 'All operator states',
     host: 'Host',
     hostPlaceholder: 'Host contains…',
@@ -435,7 +391,7 @@ const en: Messages = {
     stateAll: 'Active and recovered',
     stateActive: 'Active',
     stateRecovered: 'Recovered',
-    more: 'More filters',
+    more: 'Filters',
     column: (name, active) => `Filter by ${name}${active ? ' (active)' : ''}`,
     titleContains: 'Title contains',
     durationFrom: 'At least (min)',
@@ -475,7 +431,6 @@ const en: Messages = {
     owner: 'Owner',
     ack: 'Acknowledgement',
     open: (name) => `Open episode ${name}`,
-    recoveredAt: (time) => `Recovered ${time}`,
     noTarget: 'Target not specified',
     emptyTarget: 'Target not specified',
     untitled: 'Untitled problem',
@@ -485,7 +440,7 @@ const en: Messages = {
     recovered: 'Recovered',
   },
   workflow: {
-    title: 'Workflow', untracked: 'This episode has no workflow.', select: 'Workflow', choose: 'Choose a workflow',
+    title: 'Workflow', select: 'Workflow', choose: 'Choose a workflow',
     start: 'Start workflow', comment: 'Workflow comment', retired: 'This workflow or state is retired.',
     conflict: 'The source is active while operator work is complete. Reopen it using an available transition.',
     error: 'The workflow request failed.', stale: 'The workflow changed. Refresh and try again.', staleState: 'The workflow state changed. Review the refreshed state and try again.', staleRevision: 'The policy changed. Review the refreshed workflow and try again.', adminRequired: 'Admin role required.',
@@ -506,11 +461,10 @@ const en: Messages = {
     page: (current, total) => `Page ${current} of ${total}`,
   },
   source: {
-    lastSuccess: (value) => `Last source sync: ${value}`,
-    never: 'No source sync recorded',
-    staleTitle: 'Source unavailable — states may be stale',
-    staleBody: 'The Grafana Alerting sync failed. Active problems stay active until the source responds.',
-    updated: (value) => `Updated ${value}`,
+    lastSuccess: (value) => `Alerts updated: ${value}`,
+    never: 'Alerts have not been loaded yet',
+    staleTitle: 'Could not update alerts',
+    staleBody: 'Showing the last known status.',
   },
   errors: {
     forbidden: 'Your Grafana role does not permit this action.',
@@ -546,55 +500,26 @@ const en: Messages = {
     resetFilters: 'Reset filters',
   },
   drawer: {
-    title: 'Episode details',
-    close: 'Close episode details',
-    sourceRule: 'Open source rule',
-    copyLink: 'Copy app link',
+    title: 'Problem',
+    sourceRule: 'Alert rule',
+    copyLink: 'Copy link',
     copyDone: 'Link copied',
-    copyFailed: 'Could not copy the link.',
-    description: 'Description',
-    noDescription: 'No description provided.',
+    copyFailed: 'Could not copy link',
     labels: 'Labels',
-    noLabels: 'No labels.',
     annotations: 'Annotations',
-    noAnnotations: 'No annotations.',
-    facts: {
-      state: 'State',
-      started: 'Started',
-      recovered: 'Recovered',
-      duration: 'Duration',
-      owner: 'Owner',
-      ack: 'Acknowledgement',
-      ackAt: 'Acknowledged at',
-      episode: 'Episode',
-    },
-    owner: 'Owner label',
-    ownerPlaceholder: 'Search participants',
-    ownerHint: 'The owner label does not grant permissions.',
-    saveOwner: 'Save owner',
-    saving: 'Saving…',
-    assigneeLoading: 'Loading participants…',
-    assigneeLoadFailed: 'Could not load the participant list. Any previously loaded list is kept.',
-    assigneeNotPublished: 'No participant snapshot has been published yet. An organization administrator can update it.',
-    assigneeEmpty: 'The published participant list is empty.',
-    assigneeLegacy: 'not in participant list',
-    assigneeSnapshot: (updated, actor) => `Participant snapshot updated ${updated} by ${actor}.`,
-    assigneeUnavailable: 'This owner is not in the published participant list. The list was refreshed and your choice was kept; review it and save again.',
-    assigneeUnavailableTitle: 'Owner not in participant list',
-    assigneeNoOptions: 'No matching participants.',
+    facts: { started: 'Started', recovered: 'Recovered', duration: 'Duration', episode: 'Episode ID' },
+    claim: 'Assign to me',
+    release: 'Release',
+    free: 'Unassigned',
+    ownerConflict: 'The assignee changed.',
     acknowledge: 'Acknowledge',
-    unacknowledge: 'Remove acknowledgement',
-    ackHint: 'Acknowledgement does not mute notifications or resolve the alert.',
-    viewer: 'Viewer access is read-only. Editors and administrators can comment and acknowledge.',
+    unacknowledge: 'Undo acknowledgement',
+    undo: 'Undo',
     discardConfirm: 'Discard your unsent comment?',
-    activity: 'Activity',
-    activityNewest: 'Newest first',
-    noActivity: 'No operator actions recorded.',
-    comments: 'Discussion',
-    noComments: 'No comments on this episode yet.',
-    commentPlaceholder: 'What did you investigate or change?',
-    addComment: 'Add comment',
-    commentLimit: (used, max) => `${used} / ${max}`,
+    activity: 'History',
+    comments: 'Comments',
+    commentPlaceholder: 'Write a comment…',
+    addComment: 'Send',
   },
   activity: {
     acknowledged: 'Acknowledged',
@@ -602,6 +527,8 @@ const en: Messages = {
     ownerSet: (name) => `Owner set to ${name}`,
     ownerCleared: 'Owner cleared',
     comment: 'Comment',
+    claimed: 'Claimed the episode',
+    workflowStarted: (workflow, state) => `Started ${workflow}: ${state}`,
     unknownKind: (kind) => `Event: ${kind}`,
   },
   csv: {
@@ -669,31 +596,18 @@ const ru: Messages = {
   app: {
     title: 'Problem Desk',
     subtitle: 'Проблемы и журнал действий',
-    configuration: 'Настройка',
+    configuration: 'Настройки',
     refresh: 'Обновить',
-    syncSource: 'Синхронизировать источник',
-    syncing: 'Синхронизация…',
+    syncSource: 'Загрузить алерты',
+    syncing: 'Загрузка алертов…',
     language: 'Язык',
     timeZone: 'Часовой пояс',
     localZone: (zone) => `Локальный (${zone})`,
     utc: 'UTC',
   },
-  participants: {
-    title: 'Участники организации',
-    update: 'Обновить участников',
-    updating: 'Обновление…',
-    hint: 'Снимок участников публикует администратор организации из Grafana. Только он служит источником выбора ответственного.',
-    updated: (count) => `Снимок участников опубликован: ${ruCount(count, 'участник', 'участника', 'участников')}.`,
-    errors: {
-      forbidden: 'Публикация отклонена: сессия не является администратором организации или организация изменилась. Ничего не опубликовано.',
-      'org-mismatch': 'Grafana сообщает о другой организации, чем эта страница. Ничего не опубликовано.',
-      malformed: 'Данные участников неполные или повреждены. Ничего не опубликовано.',
-      duplicate: 'В ответе Grafana есть повторяющиеся участники. Ничего не опубликовано.',
-      'over-limit': 'Участников больше 5000. Ничего не опубликовано.',
-      conflict: 'Другой администратор уже изменил снимок участников. Актуальный снимок перезагружается; нажмите «Обновить участников» ещё раз, чтобы опубликовать текущий состав.',
-      'invalid-response': 'Сервер вернул некорректный снимок участников. Прежний снимок сохранён.',
-      unavailable: 'Не удалось получить участников организации. Прежний снимок сохранён.',
-    },
+  view: {
+    title: 'Вид', more: 'Еще', show: 'Показывать', summary: 'Сводка',
+    actions: 'Журнал действий', details: 'Данные алерта', localTime: 'Местное',
   },
   tabs: {
     label: 'Представления проблем',
@@ -728,7 +642,7 @@ const ru: Messages = {
     severityAll: 'Любая важность',
     workflow: 'Процесс',
     workflowAll: 'Все процессы',
-    workState: 'Состояние оператора',
+    workState: 'Шаг процесса',
     workStateAll: 'Все состояния оператора',
     host: 'Хост',
     hostPlaceholder: 'Хост содержит…',
@@ -746,7 +660,7 @@ const ru: Messages = {
     stateAll: 'Активные и восстановленные',
     stateActive: 'Активные',
     stateRecovered: 'Восстановленные',
-    more: 'Доп. фильтры',
+    more: 'Фильтры',
     column: (name, active) => `Фильтр: ${name}${active ? ' (применен)' : ''}`,
     titleContains: 'Название содержит',
     durationFrom: 'От (мин)',
@@ -786,7 +700,6 @@ const ru: Messages = {
     owner: 'Ответственный',
     ack: 'Подтверждение',
     open: (name) => `Открыть эпизод ${name}`,
-    recoveredAt: (time) => `Восстановлен ${time}`,
     noTarget: 'Цель не указана',
     emptyTarget: 'Цель не указана',
     untitled: 'Проблема без названия',
@@ -796,17 +709,17 @@ const ru: Messages = {
     recovered: 'Восстановлена',
   },
   workflow: {
-    title: 'Процесс', untracked: 'Для эпизода не запущен процесс.', select: 'Процесс', choose: 'Выберите процесс',
+    title: 'Процесс', select: 'Процесс', choose: 'Выберите процесс',
     start: 'Запустить процесс', comment: 'Комментарий к процессу', retired: 'Процесс или состояние выведены из использования.',
     conflict: 'Источник активен, но работа оператора завершена. Повторно откройте её доступным переходом.',
     error: 'Не удалось выполнить запрос процесса.', stale: 'Процесс изменился. Обновите данные и повторите попытку.', staleState: 'Состояние процесса изменилось. Проверьте обновлённое состояние и повторите действие.', staleRevision: 'Политика изменилась. Проверьте обновлённый процесс и повторите действие.', adminRequired: 'Требуется роль Admin.',
     untrusted: 'Состояние источника пока не подтверждено.', missing: 'Не выполнены условия',
-    ack: 'Подтверждение', owner: 'Ответственный', sourceRecovered: 'Восстановленный источник',
+    ack: 'подтверждение', owner: 'назначенный ответственный', sourceRecovered: 'восстановление алерта',
   },
   ack: {
     acknowledged: 'Подтверждено',
     unacknowledged: 'Не подтверждено',
-    acknowledgedBy: (name) => `Подтвердил(а): ${name}`,
+    acknowledgedBy: (name) => `Подтверждение: ${name}`,
     notAcknowledged: 'Без подтверждения',
   },
   pagination: {
@@ -817,11 +730,10 @@ const ru: Messages = {
     page: (current, total) => `Страница ${current} из ${total}`,
   },
   source: {
-    lastSuccess: (value) => `Последняя синхронизация: ${value}`,
-    never: 'Синхронизаций ещё не было',
-    staleTitle: 'Источник недоступен — состояния могут быть устаревшими',
-    staleBody: 'Синхронизация с Grafana Alerting не удалась. Активные проблемы останутся активными, пока источник не ответит.',
-    updated: (value) => `Обновлено: ${value}`,
+    lastSuccess: (value) => `Алерты обновлены: ${value}`,
+    never: 'Алерты еще не загружались',
+    staleTitle: 'Не удалось обновить алерты',
+    staleBody: 'Показано последнее известное состояние.',
   },
   errors: {
     forbidden: 'Ваша роль Grafana не разрешает это действие.',
@@ -857,62 +769,35 @@ const ru: Messages = {
     resetFilters: 'Сбросить фильтры',
   },
   drawer: {
-    title: 'Детали эпизода',
-    close: 'Закрыть детали эпизода',
-    sourceRule: 'Открыть исходное правило',
+    title: 'Проблема',
+    sourceRule: 'Правило',
     copyLink: 'Скопировать ссылку',
     copyDone: 'Ссылка скопирована',
-    copyFailed: 'Не удалось скопировать ссылку.',
-    description: 'Описание',
-    noDescription: 'Описание не задано.',
+    copyFailed: 'Не удалось скопировать ссылку',
     labels: 'Метки',
-    noLabels: 'Меток нет.',
     annotations: 'Аннотации',
-    noAnnotations: 'Аннотаций нет.',
-    facts: {
-      state: 'Состояние',
-      started: 'Начало',
-      recovered: 'Восстановлен',
-      duration: 'Длительность',
-      owner: 'Ответственный',
-      ack: 'Подтверждение',
-      ackAt: 'Подтверждён',
-      episode: 'Эпизод',
-    },
-    owner: 'Метка ответственного',
-    ownerPlaceholder: 'Поиск участника',
-    ownerHint: 'Метка ответственного не выдаёт прав доступа.',
-    saveOwner: 'Сохранить ответственного',
-    saving: 'Сохранение…',
-    assigneeLoading: 'Загрузка списка участников…',
-    assigneeLoadFailed: 'Не удалось загрузить список участников. Ранее загруженный список сохранён, если он был.',
-    assigneeNotPublished: 'Снимок участников ещё не опубликован. Его может обновить администратор организации.',
-    assigneeEmpty: 'Опубликованный список участников пуст.',
-    assigneeLegacy: 'нет в списке участников',
-    assigneeSnapshot: (updated, actor) => `Снимок участников обновлён ${updated}, ${actor}.`,
-    assigneeUnavailable: 'Выбранный ответственный отсутствует в опубликованном списке. Список обновлён, выбор сохранён — проверьте его и сохраните ещё раз.',
-    assigneeUnavailableTitle: 'Ответственный не в списке участников',
-    assigneeNoOptions: 'Нет подходящих участников.',
+    facts: { started: 'Начало', recovered: 'Восстановление', duration: 'Длительность', episode: 'ID' },
+    claim: 'Взять себе',
+    release: 'Освободить',
+    free: 'Без ответственного',
+    ownerConflict: 'Ответственный изменился.',
     acknowledge: 'Подтвердить',
-    unacknowledge: 'Снять подтверждение',
-    ackHint: 'Подтверждение не отключает уведомления и не закрывает алерт.',
-    viewer: 'Роль Viewer: только просмотр. Редакторы и администраторы могут комментировать и подтверждать.',
-    discardConfirm: 'Отменить неотправленный комментарий?',
-    activity: 'Активность',
-    activityNewest: 'Сначала новые',
-    noActivity: 'Действий операторов пока нет.',
-    comments: 'Обсуждение',
-    noComments: 'Комментариев к этому эпизоду пока нет.',
-    commentPlaceholder: 'Что вы проверили или изменили?',
-    addComment: 'Добавить комментарий',
-    commentLimit: (used, max) => `${used} / ${max}`,
+    unacknowledge: 'Отменить подтверждение',
+    undo: 'Отменить',
+    discardConfirm: 'Закрыть без отправки комментария?',
+    activity: 'История',
+    comments: 'Комментарии',
+    commentPlaceholder: 'Написать комментарий…',
+    addComment: 'Отправить',
   },
   activity: {
     acknowledged: 'Подтверждено',
     unacknowledged: 'Подтверждение снято',
     ownerSet: (name) => `Ответственный: ${name}`,
-    ownerCleared: 'Ответственный снят',
+    ownerCleared: 'Назначение снято',
     comment: 'Комментарий',
+    claimed: 'Эпизод взят в работу',
+    workflowStarted: (workflow, state) => `Запуск процесса «${workflow}»: ${state}`,
     unknownKind: (kind) => `Событие: ${kind}`,
   },
   csv: {

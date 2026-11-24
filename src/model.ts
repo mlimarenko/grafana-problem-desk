@@ -173,6 +173,31 @@ export function assignmentTarget(body: string): string | undefined {
   return match?.[1]?.trim() || undefined;
 }
 
+export function activityContent(item: ActivityItem, language: 'ru' | 'en', workflows: PolicyWorkflow[] = []): { text: string; body?: string } {
+  const m = dictionaries[language];
+  switch (item.kind) {
+    case 'ack': return { text: m.activity.acknowledged };
+    case 'unack': return { text: m.activity.unacknowledged };
+    case 'assign': {
+      const target = assignmentTarget(item.body ?? '');
+      return { text: target === item.author ? m.activity.claimed : target ? m.activity.ownerSet(target) : m.activity.ownerCleared };
+    }
+    case 'comment': return { text: '', body: item.body };
+  }
+  if (item.eventKind === 'recovered') {
+    return { text: m.status.recovered, body: item.body === 'Alert cleared from source' ? undefined : item.body };
+  }
+  const match = item.eventKind === 'workflow_start' ? /^Workflow (\S+) started in state (\S+)$/.exec(item.body ?? '')
+    : item.eventKind === 'workflow_transition' ? /^Workflow (\S+) moved from (\S+) to (\S+)$/.exec(item.body ?? '') : null;
+  if (match) {
+    const workflow = workflows.find((entry) => entry.id === match[1]);
+    const name = workflow?.name[language] ?? match[1];
+    const state = (id: string) => workflow?.states.find((entry) => entry.id === id)?.name[language] ?? id;
+    return { text: match[3] ? `${name}: ${state(match[2])} → ${state(match[3])}` : m.activity.workflowStarted(name, state(match[2])) };
+  }
+  return { text: m.activity.unknownKind(item.eventKind || m.common.unknown), body: item.body };
+}
+
 export function mergedActivity(detail: Pick<Detail, 'comments' | 'events'>): ActivityItem[] {
   const comments: ActivityItem[] = (detail.comments ?? []).map((comment) => ({
     id: `comment:${comment.id}`,

@@ -1,30 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from 'react';
 import { config } from '@grafana/runtime';
-import { pluginId, type ErrorKind } from '../model';
+import type { ErrorKind } from '../model';
+import { readPreference, writePreference } from '../lib/preferences';
 import { dictionaries, resolveLanguage, type Language, type Messages } from './messages';
 import { formatDateTime, formatDurationMs, formatRelativeTime, resolvedTimeZone, type TimeZoneMode } from './format';
 
-const languageStorageKey = `${pluginId}.language`;
-const timeZoneStorageKey = `${pluginId}.timeZone`;
-
-function readStorage(key: string): string | undefined {
-  try {
-    return window.localStorage.getItem(key) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function writeStorage(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // The current page keeps the selection when storage is unavailable.
-  }
-}
-
 export function detectLanguage(): Language {
-  const stored = readStorage(languageStorageKey);
+  const stored = readPreference('language');
   if (stored === 'en' || stored === 'ru') {
     return stored;
   }
@@ -33,7 +15,7 @@ export function detectLanguage(): Language {
 }
 
 export function detectTimeZone(): TimeZoneMode {
-  return readStorage(timeZoneStorageKey) === 'UTC' ? 'UTC' : 'local';
+  return readPreference('timeZone') === 'UTC' ? 'UTC' : 'local';
 }
 
 export function errorText(kind: ErrorKind, messages: Messages): string {
@@ -69,12 +51,12 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   const setLanguage = useCallback((next: Language) => {
     setLanguageState(next);
-    writeStorage(languageStorageKey, next);
+    writePreference('language', next);
   }, []);
 
   const setTimeZone = useCallback((next: TimeZoneMode) => {
     setTimeZoneState(next);
-    writeStorage(timeZoneStorageKey, next);
+    writePreference('timeZone', next);
   }, []);
 
   useEffect(() => {

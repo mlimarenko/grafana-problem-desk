@@ -20,25 +20,26 @@ import {
 import { DetailDrawer, type BusyAction } from '../components/DetailDrawer';
 import { ProblemColumnFilter, type ColumnFilterProps } from '../components/ProblemColumnFilter';
 import { ProblemTable } from '../components/ProblemTable';
+import { ViewOptions } from '../components/ViewOptions';
 import { errorText, I18nProvider, useI18n, type Language } from '../i18n';
-import { dateTimeLocalToISO, toDateTimeLocalValue } from '../i18n/format';
+import { dateTimeLocalToISO, toDateTimeLocalValue, type TimeZoneMode } from '../i18n/format';
 import {
   errorStatus,
-  fetchAssignees,
   fetchDetail,
   fetchPolicy,
   fetchProblems,
+  isOwnershipConflict,
   postAck,
-  postAssign,
+  postClaim,
   postComment,
+  postRelease,
   postSync,
   postUnack,
   resolveProblem,
-  updateParticipants,
 } from '../api';
-import { ParticipantsError, assigneeOptions as buildAssigneeOptions, isAssigneeUnavailable, type AssigneeCatalog } from '../lib/assignees';
 import { toCSV, downloadCSV } from '../lib/csv';
 import { resolveDeepLink, type DeepLinkError } from '../lib/deeplink';
+import { useViewPreferences } from '../lib/preferences';
 import { correctedOffset, submitCommentDraft, validLabelFilter } from '../lib/workspace';
 import {
   activeFilterCount,
@@ -97,17 +98,16 @@ function Workspace() {
     setLanguage,
     timeZone,
     setTimeZone,
-    zoneLabel,
     messages: m,
     formatDate,
     formatDuration,
-    formatRelative,
   } = useI18n();
+  const preferences = useViewPreferences();
+  const showSummary = preferences.visible.has('summary');
   const role = config.bootData.user.orgRole;
   const canWrite = role === 'Editor' || role === 'Admin';
-  const canAdmin = role === 'Admin';
   const canSync = role === 'Admin';
-  const orgId = config.bootData.user.orgId;
+  const currentLogin = config.bootData.user.login;
 
   const [query, setQueryState] = useState<WorkspaceQuery>(() => parseQuery(window.location.search));
   const [policy, setPolicy] = useState<PolicyResponse>();
@@ -282,56 +282,17 @@ function Workspace() {
 
   useEffect(() => {
     setActionError(undefined);
-    setAssigneeNotice(undefined);
+    setOwnerConflict(false);
   }, [selectedId]);
 
   const [busyAction, setBusyAction] = useState<BusyAction>();
   const [actionError, setActionError] = useState<ErrorKind>();
+  const [ownerConflict, setOwnerConflict] = useState(false);
+  const ownershipPending = useRef(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<ErrorKind>();
   const [drafts, setDrafts] = useState<Record<string, string>>(() => Object.create(null));
-  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>(() => Object.create(null));
   const draft = selectedId ? drafts[selectedId] ?? '' : '';
-  const ownerDraft = selectedId ? ownerDrafts[selectedId] ?? detail?.problem.assignee ?? '' : '';
-
-  const [assigneeCatalog, setAssigneeCatalog] = useState<AssigneeCatalog>();
-  const [assigneeLoading, setAssigneeLoading] = useState(false);
-  const [assigneeError, setAssigneeError] = useState<ErrorKind>();
-  const [assigneeNotice, setAssigneeNotice] = useState<string>();
-  const [assigneeAttempt, setAssigneeAttempt] = useState(0);
-  const [participantsBusy, setParticipantsBusy] = useState(false);
-  const [participantsMessage, setParticipantsMessage] = useState<{ severity: 'success' | 'error'; text: string }>();
-
-  useEffect(() => {
-    if (!canWrite) {
-      setAssigneeCatalog(undefined);
-      setAssigneeError(undefined);
-      setAssigneeLoading(false);
-      return;
-    }
-    let active = true;
-    setAssigneeLoading(true);
-    setAssigneeError(undefined);
-    fetchAssignees()
-      .then((catalog) => {
-        if (active) {
-          setAssigneeCatalog(catalog);
-        }
-      })
-      .catch((error) => {
-        if (active) {
-          setAssigneeError(classifyError(error));
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setAssigneeLoading(false);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [canWrite, assigneeAttempt]);
 
   const [searchDraft, setSearchDraft] = useState(query.search);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -484,13 +445,6 @@ function Workspace() {
     setDrafts((previous) => Object.assign(Object.create(null), previous, { [selectedId]: value }));
   }
 
-  function setOwnerDraft(value: string) {
-    if (!selectedId) {
-      return;
-    }
-    setOwnerDrafts((previous) => Object.assign(Object.create(null), previous, { [selectedId]: value }));
-  }
-
   function updateDetailProblem(updated: Problem) {
     if (!updated || typeof updated.id !== 'string') {
       return;
@@ -536,57 +490,32 @@ function Workspace() {
     });
   }
 
-  function assignOwner() {
+  async function writeOwnership(claim: boolean) {
     const problemId = queryRef.current.problem;
-    if (!problemId) {
+    if (!problemId || ownershipPending.current) {
       return;
     }
-    const value = ownerDraft;
-    void runAction('assign', problemId, async () => {
-      try {
-        updateDetailProblem(await postAssign(problemId, value));
-      } catch (error) {
-        if (isAssigneeUnavailable(error)) {
-          setAssigneeNotice(m.drawer.assigneeUnavailable);
-          setAssigneeAttempt((attempt) => attempt + 1);
-          return;
-        }
-        throw error;
-      }
-      setAssigneeNotice(undefined);
-      setOwnerDrafts((previous) => {
-        if (previous[problemId] !== undefined && previous[problemId] !== value) {
-          return previous;
-        }
-        const next = Object.assign(Object.create(null), previous);
-        delete next[problemId];
-        return next;
-      });
-    });
-  }
-
-  async function publishParticipants() {
-    if (!assigneeCatalog || participantsBusy) {
-      return;
-    }
-    setParticipantsBusy(true);
-    setParticipantsMessage(undefined);
+    ownershipPending.current = true;
+    setBusyAction('owner');
+    setActionError(undefined);
+    setOwnerConflict(false);
     try {
-      const catalog = await updateParticipants(orgId, assigneeCatalog.revision);
-      setAssigneeCatalog(catalog);
-      setAssigneeError(undefined);
-      setParticipantsMessage({ severity: 'success', text: m.participants.updated(catalog.members.length) });
+      const updated = claim ? await postClaim(problemId) : await postRelease(problemId);
+      if (queryRef.current.problem === problemId) {
+        updateDetailProblem(updated);
+      }
     } catch (error) {
-      if (error instanceof ParticipantsError) {
-        if (error.reason === 'conflict') {
-          setAssigneeAttempt((attempt) => attempt + 1);
+      if (queryRef.current.problem === problemId) {
+        if (isOwnershipConflict(error)) {
+          setOwnerConflict(true);
+        } else {
+          setActionError(classifyError(error));
         }
-        setParticipantsMessage({ severity: 'error', text: m.participants.errors[error.reason] });
-      } else {
-        setParticipantsMessage({ severity: 'error', text: errorText(classifyError(error), m) });
       }
     } finally {
-      setParticipantsBusy(false);
+      ownershipPending.current = false;
+      setBusyAction((current) => (current === 'owner' ? undefined : current));
+      setRefreshToken((value) => value + 1);
     }
   }
 
@@ -780,7 +709,6 @@ function Workspace() {
     labelOptions.unshift({ label: query.labelKey, value: query.labelKey });
   }
   const empty = listing && listing.total === 0 && !listLoading;
-  const drawerAssigneeOptions = buildAssigneeOptions(assigneeCatalog?.members ?? [], ownerDraft, m.drawer.assigneeLegacy);
 
   const columns = policy?.doc.views.columns ?? problemColumns;
   const columnFilters: ColumnFilterProps = {
@@ -792,52 +720,31 @@ function Workspace() {
   };
   const headerActions = (
     <div className={styles.headerActions}>
-          <Select
-            aria-label={m.app.language}
-            width={13}
-            value={language}
-            options={[
-              { label: 'English', value: 'en' },
-              { label: 'Русский', value: 'ru' },
-            ]}
-            onChange={(option) => option.value && setLanguage(option.value as Language)}
+      <Button size="sm" variant="secondary" fill="text" icon="sync" disabled={refreshing} onClick={() => setRefreshToken((value) => value + 1)}>
+        {refreshing ? m.common.refreshing : m.app.refresh}
+      </Button>
+      {canSync && (
+        <Button size="sm" variant="secondary" fill="text" icon="cloud-upload" disabled={syncing} onClick={() => void sync()}>
+          {syncing ? m.app.syncing : m.app.syncSource}
+        </Button>
+      )}
+      <ViewOptions scope="list" preferences={preferences}>
+        <Field label={m.app.language}>
+          <RadioButtonGroup<Language>
+            options={[{ label: 'English', value: 'en' }, { label: 'Русский', value: 'ru' }]}
+            aria-label={m.app.language} value={language} onChange={setLanguage}
           />
-          <Button
-            variant="secondary"
-            icon="clock-nine"
-            title={m.app.timeZone}
-            aria-label={`${m.app.timeZone}: ${zoneLabel}`}
-            onClick={() => setTimeZone(timeZone === 'UTC' ? 'local' : 'UTC')}
-          >
-            {zoneLabel}
-          </Button>
-          <Button
-            variant="secondary"
-            icon="sync"
-            disabled={refreshing}
-            onClick={() => setRefreshToken((value) => value + 1)}
-          >
-            {refreshing ? m.common.refreshing : m.app.refresh}
-          </Button>
-          {canSync && (
-            <Button variant="secondary" icon="cloud-upload" disabled={syncing} onClick={() => void sync()}>
-              {syncing ? m.app.syncing : m.app.syncSource}
-            </Button>
-          )}
-          {canAdmin && (
-            <Button
-              variant="secondary"
-              icon="users-alt"
-              title={m.participants.hint}
-              disabled={participantsBusy || assigneeLoading || !assigneeCatalog}
-              onClick={() => void publishParticipants()}
-            >
-              {participantsBusy ? m.participants.updating : m.participants.update}
-            </Button>
-          )}
-          <LinkButton variant="secondary" fill="text" icon="cog" href={`${config.appSubUrl}/plugins/${pluginId}?page=configuration`}>
-            {m.app.configuration}
-          </LinkButton>
+        </Field>
+        <Field label={m.app.timeZone}>
+          <RadioButtonGroup<TimeZoneMode>
+            options={[{ label: m.view.localTime, value: 'local' }, { label: m.app.utc, value: 'UTC' }]}
+            aria-label={m.app.timeZone} value={timeZone} onChange={setTimeZone}
+          />
+        </Field>
+      </ViewOptions>
+      <LinkButton size="sm" variant="secondary" fill="text" icon="cog" href={`${config.appSubUrl}/plugins/${pluginId}?page=configuration`}>
+        {m.app.configuration}
+      </LinkButton>
     </div>
   );
 
@@ -845,38 +752,28 @@ function Workspace() {
     <PluginPage actions={headerActions} subTitle={false}>
       <div className={styles.page}>
 
-      {participantsMessage && (
-        <Alert className={styles.notice} severity={participantsMessage.severity} title={m.participants.title}>
-          {participantsMessage.text}
-        </Alert>
-      )}
-
       <TabsBar className={styles.tabs} aria-label={m.tabs.label}>
         <Tab
           label={m.tabs.problems}
-          icon="fire"
           active={query.view === 'problems'}
           tooltip={m.tabs.problemsHint}
-          counter={query.view === 'problems' ? (listing ? total : null) : null}
           onChangeTab={() => changeView('problems')}
         />
         <Tab
           label={m.tabs.recent}
-          icon="clock-nine"
           active={query.view === 'recent'}
           tooltip={m.tabs.recentHint}
           onChangeTab={() => changeView('recent')}
         />
         <Tab
           label={m.tabs.history}
-          icon="history"
           active={query.view === 'history'}
           tooltip={m.tabs.historyHint}
           onChangeTab={() => changeView('history')}
         />
       </TabsBar>
 
-      {listing && <section className={styles.stats} aria-label={m.table.caption}>
+      {listing && showSummary && <section className={styles.stats} aria-label={m.view.summary}>
         {[
           { label: m.summary.matchingLabel, value: listing ? total : '—', tone: '' },
           { label: m.summary.active, value: listing ? summary.active : '—', tone: 'critical' },
@@ -1075,8 +972,7 @@ function Workspace() {
       <div className={styles.meta} role="status">
         {listLoading && <span>{m.common.loading}</span>}
         {refreshing && <span>{m.common.refreshing}</span>}
-        {listing && <span>{m.source.lastSuccess(listing.source.lastSuccess ? formatDate(listing.source.lastSuccess) : m.source.never)}</span>}
-        {lastLoadedAt > 0 && <span>{m.source.updated(formatRelative(new Date(lastLoadedAt).toISOString()))}</span>}
+        {listing && showSummary && <span>{listing.source.lastSuccess ? m.source.lastSuccess(formatDate(listing.source.lastSuccess)) : m.source.never}</span>}
       </div>
 
       <DetailDrawer
@@ -1087,25 +983,21 @@ function Workspace() {
         actionError={actionError}
         busyAction={busyAction}
         draft={draft}
-        ownerDraft={ownerDraft}
-        assigneeOptions={drawerAssigneeOptions}
-        assigneeCatalog={assigneeCatalog}
-        assigneeLoading={assigneeLoading}
-        assigneeError={assigneeError}
-        assigneeNotice={assigneeNotice}
+        currentLogin={currentLogin}
+        ownerConflict={ownerConflict}
         canWrite={canWrite}
         levels={listing?.levels ?? policy?.doc.levels ?? []}
         severityKey={listing?.severityKey ?? policy?.doc.severityKey ?? ''}
         policy={policy?.doc}
+        preferences={preferences}
         onWorkflowChanged={() => setRefreshToken((value) => value + 1)}
         onDraftChange={setDraft}
-        onOwnerDraftChange={setOwnerDraft}
         onClose={closeDrawer}
         onRetry={() => setDetailAttempt((value) => value + 1)}
-        onRetryAssignees={() => setAssigneeAttempt((value) => value + 1)}
         onAck={acknowledge}
         onUnack={unacknowledge}
-        onAssign={assignOwner}
+        onClaim={() => void writeOwnership(true)}
+        onRelease={() => void writeOwnership(false)}
         onComment={addComment}
       />
       </div>
@@ -1208,9 +1100,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
     flex-wrap: wrap;
     flex: 0 1 auto;
-  `,
-  notice: css`
-    margin-top: ${theme.spacing(1)};
   `,
   tabs: css`
     margin-top: ${theme.spacing(1.5)};
